@@ -1,0 +1,45 @@
+{
+  "name": "pbhandover",
+  "version": "0.1.0",
+  "description": "Non-blocking Stop hook that keeps a shared HANDOVER.md up to date for both Claude Code and Codex CLI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pbtechlab/pbhandover.git"
+  },
+  "homepage": "https://github.com/pbtechlab/pbhandover#readme",
+  "bugs": {
+    "url": "https://github.com/pbtechlab/pbhandover/issues"
+  },
+  "bin": {
+    "pbhandover": "bin/pbhandover.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "test/",
+    "templates/",
+    "prompts/",
+    "commands/",
+    "README.md",
+    "README.ja.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "postinstall": "node -e \"try{require('./src/postinstall')}catch(e){console.warn('[pbhandover] postinstall setup skipped: '+(e&&e.message?e.message:e))}\"",
+    "test": "node --test",
+    "smoke": "node bin/pbhandover.js --help"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "codex-cli",
+    "hooks",
+    "handover",
+    "automation"
+  ]
+}
