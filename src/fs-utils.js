@@ -50,6 +50,34 @@ function atomicWrite(file, text) {
   fs.renameSync(temp, file);
 }
 
+// Remove stray temp files left next to `file` by atomic writers (both this
+// tool's `.NAME.<pid>.<ts>.tmp` and the agents' Write tools that produce
+// `NAME.tmp.<pid>.<hex>`). Best effort; never throws.
+function cleanupTempFiles(file) {
+  const dir = path.dirname(file);
+  const base = path.basename(file);
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of entries) {
+    if (name === base) continue;
+    const isAgentTemp = name.startsWith(`${base}.tmp.`);
+    const isOwnTemp = name.startsWith(`.${base}.`) && name.endsWith(".tmp");
+    if (!isAgentTemp && !isOwnTemp) continue;
+    try {
+      fs.unlinkSync(path.join(dir, name));
+      removed += 1;
+    } catch {
+      // Another process may have removed it; ignore.
+    }
+  }
+  return removed;
+}
+
 function userConfigDir() {
   return path.join(os.homedir(), USER_DIR_NAME);
 }
@@ -77,6 +105,7 @@ function isSubPath(parent, candidate) {
 
 module.exports = {
   atomicWrite,
+  cleanupTempFiles,
   claudeHomeDir,
   codexHomeDir,
   copyFileIfMissing,

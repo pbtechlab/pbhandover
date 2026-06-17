@@ -15,6 +15,7 @@ const {
 } = require("./defaults");
 const {
   atomicWrite,
+  cleanupTempFiles,
   copyFileIfMissing,
   ensureDir,
   readJson,
@@ -436,6 +437,10 @@ function processJob(project, jobFile) {
 
   const timeout = Number(config.workerTimeoutMs || 10 * 60 * 1000);
   const result = adapter.runSummarizer({ root: project.root, model, prompt, outFile, timeout });
+
+  // The agent's Write/Edit tools (and interrupted atomic writes) can leave
+  // stray HANDOVER.md.tmp.* files in the project root. Sweep them every job.
+  cleanupTempFiles(project.handoverFile);
 
   if (adapter.summaryFromStdout) {
     try {
