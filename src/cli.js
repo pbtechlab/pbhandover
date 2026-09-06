@@ -75,23 +75,23 @@ async function main(argv) {
 }
 
 function help() {
-  console.log(`${CLI_NAME} — shared HANDOVER.md for Claude Code and Codex CLI
+  console.log(`${CLI_NAME} — shared HANDOVER.md for Claude Code, Codex CLI and Muse Code
 
 Usage:
   ${CLI_NAME} setup [--force] [--no-router]
-  ${CLI_NAME} on [--claude] [--codex] [--track-handover] [--track-hooks] [--force-template]
-  ${CLI_NAME} off [--claude] [--codex]
+  ${CLI_NAME} on [--claude] [--codex] [--muse] [--track-handover] [--track-hooks] [--force-template]
+  ${CLI_NAME} off [--claude] [--codex] [--muse]
   ${CLI_NAME} status
-  ${CLI_NAME} router install|uninstall|status [--claude] [--codex]
+  ${CLI_NAME} router install|uninstall|status [--claude] [--codex] [--muse]
   ${CLI_NAME} trust
-  ${CLI_NAME} enqueue --agent claude|codex
+  ${CLI_NAME} enqueue --agent claude|codex|muse
   ${CLI_NAME} worker
   ${CLI_NAME} flush
   ${CLI_NAME} template path|sync [--force]
 
 Commands:
   setup      Create the shared user template, prompt, config and command router.
-  on         Enable the Stop hook in the current project (auto-detects claude/codex).
+  on         Enable the Stop hook in the current project (auto-detects claude/codex/muse).
   off        Disable this tool's Stop hook in the current project.
   status     Show project, per-agent and queue status.
   router     Install or remove the @handover command router (and /handover slash).
@@ -144,7 +144,7 @@ async function setup(args) {
 
   if (!noRouter) {
     for (const adapter of allAdapters()) {
-      if (adapter.isAvailable()) adapter.installRouter({ quiet });
+      if (adapter.isAvailable()) await adapter.installRouter({ quiet });
     }
   }
 }
@@ -265,7 +265,7 @@ function status() {
     const adapter = getAdapter(name);
     const entry = agents[name] || {};
     const hook = adapter.projectHookFileStatus(root);
-    console.log(`[${name}] enabled: ${entry.enabled === true} | model: ${entry.model || adapter.defaultModel} | available: ${adapter.isAvailable()} | hook file: ${hook.exists ? "exists" : "missing"}`);
+    console.log(`[${name}] enabled: ${entry.enabled === true} | model: ${entry.model || adapter.defaultModel || "CLI default"} | available: ${adapter.isAvailable()} | hook file: ${hook.exists ? "exists" : "missing"}`);
   }
 }
 
@@ -278,6 +278,7 @@ async function enqueue(args) {
   if (process.env[WORKER_ENV] === "1") return;
 
   const agent = parseAgentValue(args) || "claude";
+  getAdapter(agent);
   const stdin = await readStdin();
   let payload = {};
   if (stdin.trim()) {
@@ -295,6 +296,8 @@ async function enqueue(args) {
   const project = projectPaths(root);
   const config = readJson(project.configFile, {});
   if (config.enabled !== true) return;
+  if (/^[a-zA-Z0-9-]+$/.test(payload.session_id || "") &&
+      fs.existsSync(path.join(project.toolDir, "worker-sessions", `${payload.session_id}.json`))) return;
   const agentConfig = (config.agents || {})[agent];
   if (!agentConfig || agentConfig.enabled !== true) return;
 
@@ -325,6 +328,7 @@ async function enqueue(args) {
 // ---------------------------------------------------------------------------
 
 async function promptRouter(args) {
+  if (process.env[WORKER_ENV] === "1") return;
   const agent = parseAgentValue(args) || "claude";
   const adapter = getAdapter(agent);
   const stdin = await readStdin();
@@ -352,7 +356,8 @@ async function promptRouter(args) {
   });
 
   const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-  const reason = output || `${parsed.display} completed.`;
+  const reason = result.error ? `${parsed.display} failed: ${result.error.message}` :
+    output || (result.status === 0 ? `${parsed.display} completed.` : `${parsed.display} failed (exit ${result.status}).`);
   console.log(adapter.formatRouterResponse(parsed.display, reason));
   promptRouterLog(`handled ${parsed.display} status=${result.status}`);
 }
@@ -423,8 +428,13 @@ function worker(args) {
 }
 
 function processJob(project, jobFile) {
-  const job = readJson(jobFile, null);
-  if (!job) return;
+  let job;
+  try { job = readJson(jobFile, null); if (!job) throw new Error("Empty job"); }
+  catch (error) {
+    fs.renameSync(jobFile, path.join(project.failedDir, path.basename(jobFile)));
+    appendWorkerLog(project, `invalid job ${path.basename(jobFile)}: ${error.message}`);
+    return;
+  }
   const agentName = job.agent || "claude";
   const adapter = getAdapter(agentName);
   const config = readJson(project.configFile, {});
@@ -436,7 +446,14 @@ function processJob(project, jobFile) {
   atomicWrite(promptFile, prompt);
 
   const timeout = Number(config.workerTimeoutMs || 10 * 60 * 1000);
-  const result = adapter.runSummarizer({ root: project.root, model, prompt, outFile, timeout });
+  let result;
+  const before = readText(project.handoverFile, "");
+  try { result = adapter.runSummarizer({ root: project.root, model, prompt, outFile, timeout }); }
+  catch (error) { result = { status: null, error }; }
+  if (result.status === 0 && (!fs.existsSync(project.handoverFile) || readText(project.handoverFile) === before)) {
+    result = { ...result, status: 1, error: new Error("Agent exited successfully but did not update HANDOVER.md") };
+  }
+  if (fs.existsSync(outFile)) atomicWrite(outFile, redact(readText(outFile)));
 
   // The agent's Write/Edit tools (and interrupted atomic writes) can leave
   // stray HANDOVER.md.tmp.* files in the project root. Sweep them every job.
@@ -584,7 +601,8 @@ function resolveAgentsForOn(args, root) {
     const adapter = getAdapter(name);
     return adapter.isConfigured(root) || adapter.isAvailable();
   });
-  return detected.length ? detected : [...AGENTS];
+  if (!detected.length) throw new Error("No coding agent detected. Install an agent or select --claude, --codex, or --muse explicitly.");
+  return detected;
 }
 
 // ---------------------------------------------------------------------------
@@ -618,20 +636,29 @@ function promptRouterLog(message) {
 // ---------------------------------------------------------------------------
 
 function updateGitignore(root, options) {
-  const file = path.join(root, ".gitignore");
-  const current = readText(file, "");
-  const lines = current.split(/\r?\n/);
-  const required = [`${TOOL_DIR}/`];
-  // Anchor HANDOVER.md to repo root: on a case-insensitive filesystem an
-  // unanchored "HANDOVER.md" also matches paths like commands/handover.md.
-  if (!options.trackHandover) required.unshift(`/${HANDOVER_FILE}`);
-  if (!options.trackHooks) {
-    for (const name of options.agents) required.push(getAdapter(name).hookIgnoreEntry());
+  // Private names belong in the user's exclusion file, not a public manifest.
+  const lookup = childProcess.spawnSync("git", ["config", "--global", "--path", "core.excludesFile"], { encoding: "utf8", windowsHide: true });
+  let file = String(lookup.stdout || "").trim();
+  if (!file) {
+    file = path.join(require("node:os").homedir(), ".gitignore_global");
+    const saved = childProcess.spawnSync("git", ["config", "--global", "core.excludesFile", file], { encoding: "utf8", windowsHide: true });
+    if (saved.status !== 0) throw new Error("Could not configure global Git exclusions");
   }
-  const missing = required.filter((entry) => !lines.includes(entry));
-  if (missing.length === 0) return;
-  const block = ["", `# ${CLI_NAME}`, ...missing, ""].join("\n");
-  writeText(file, `${current.replace(/\s*$/, "")}${block}`);
+  const current = readText(file, "");
+  const required = [".env", ".env.*", "*.key", "*.pem", HANDOVER_FILE, `${HANDOVER_FILE}.bak`, `${HANDOVER_FILE}.tmp.*`, `.${HANDOVER_FILE}.*.tmp`, `${TOOL_DIR}/`, ".claude/settings.local.json", ".codex/hooks.json"];
+  const missing = required.filter((entry) => !current.split(/\r?\n/).includes(entry));
+  if (missing.length) writeText(file, current.trimEnd() + "\n" + missing.join("\n") + "\n");
+  // Explicit tracking overrides are repository-local as well.
+  const info = childProcess.spawnSync("git", ["-C", root, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8", windowsHide: true });
+  if (info.status === 0) {
+    const target = path.resolve(root, info.stdout.trim());
+    const previous = readText(target, "");
+    const overrides = [`!/${HANDOVER_FILE}`, ...AGENTS.filter((name) => name !== "muse").map((name) => `!/${getAdapter(name).hookIgnoreEntry()}`)];
+    const lines = previous.split(/\r?\n/).filter((line) => !overrides.includes(line));
+    if (options.trackHandover) lines.push(`!/${HANDOVER_FILE}`);
+    if (options.trackHooks) for (const name of options.agents.filter((name) => name !== "muse")) lines.push(`!/${getAdapter(name).hookIgnoreEntry()}`);
+    writeText(target, lines.join("\n").trimEnd() + "\n");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -720,7 +747,7 @@ function startDetachedWorker(project) {
         "worker",
         "--project",
         root
-      ].map(psSingleQuoted).join(", ")}) -WorkingDirectory ${psSingleQuoted(root)}`
+      ].map((arg) => psSingleQuoted(`"${arg}"`)).join(", ")}) -WorkingDirectory ${psSingleQuoted(root)}`
     ].join("\n");
     const encoded = Buffer.from(script, "utf16le").toString("base64");
     const result = childProcess.spawnSync("powershell.exe", [

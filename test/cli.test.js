@@ -29,7 +29,10 @@ function run(args, { cwd, home, input }) {
       HOME: home,
       CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
       CODEX_HOME: path.join(home, ".codex"),
-      PBHANDOVER_NO_WORKER: "1"
+      PBHANDOVER_NO_WORKER: "1",
+      PBHANDOVER_MUSE_BIN: path.join(home, "no-muse"),
+      GIT_CONFIG_GLOBAL: path.join(home, "test.gitconfig"),
+      GIT_CONFIG_NOSYSTEM: "1"
     }
   });
 }
@@ -37,7 +40,7 @@ function run(args, { cwd, home, input }) {
 test("--help lists the unified command surface", () => {
   const res = run(["--help"], { cwd: process.cwd(), home: os.tmpdir() });
   assert.strictEqual(res.status, 0);
-  assert.match(res.stdout, /shared HANDOVER\.md for Claude Code and Codex CLI/);
+  assert.match(res.stdout, /shared HANDOVER\.md for Claude Code, Codex CLI and Muse Code/);
   assert.match(res.stdout, /@handover on/);
 });
 

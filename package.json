@@ -1,7 +1,7 @@
 {
   "name": "pbhandover",
-  "version": "0.1.1",
-  "description": "Non-blocking Stop hook that keeps a shared HANDOVER.md up to date for both Claude Code and Codex CLI.",
+  "version": "0.2.0",
+  "description": "Non-blocking shared handover automation for Claude Code, Codex CLI, and Muse Code, including Windows/WSL integration.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -40,6 +40,8 @@
     "codex-cli",
     "hooks",
     "handover",
-    "automation"
+    "automation",
+    "muse-code",
+    "wsl"
   ]
 }

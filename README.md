@@ -1,6 +1,6 @@
 # pbhandover
 
-`pbhandover` is a single npm CLI that keeps **one shared `HANDOVER.md`** — a living project handover note — automatically up to date for **both Claude Code and Codex CLI**. It works through each agent's **Stop hook**, and it is **non-blocking**: when a turn ends the hook only enqueues a tiny job and returns immediately. A detached background worker then asks an agent (in headless mode) to summarize the latest turn into `HANDOVER.md`. Your agent never waits on the handover update.
+`pbhandover` is a single npm CLI that keeps **one shared `HANDOVER.md`** — a living project handover note — automatically up to date for **Claude Code, Codex CLI, and Muse Code**. It works through each agent's **Stop hook**, and it is **non-blocking**: when a turn ends the hook only enqueues a tiny job and returns immediately. A detached background worker then asks an agent (in headless mode) to summarize the latest turn into `HANDOVER.md`. Your agent never waits on the handover update.
 
 日本語版は [README.ja.md](README.ja.md) を参照してください。
 
@@ -53,7 +53,7 @@ The generated handover files are local by default. They can include machine-spec
 ## Highlights
 
 - **One shared state directory per project** — `.pbhandover/` holds config, template, prompt, the queue, logs, and the worker lock.
-- **One shared `HANDOVER.md`** at the project root, written and read by both agents.
+- **One shared `HANDOVER.md`** at the project root, written and read by all enabled agents.
 - **Per-firing-agent summarization** — each Stop hook tags its job with which agent fired (`--agent claude` / `--agent codex`). The worker summarizes that job with the **same** agent (Claude turns by Claude, Codex turns by Codex). Models are configurable per agent.
 - **In-session control** — type `@handover on|off|status|flush` (also `setup`/`doctor`) directly inside a Claude Code or Codex session. Claude Code also exposes a native `/handover` slash command.
 - **Non-blocking** — the Stop hook just enqueues; the worker runs detached in the background.
@@ -63,13 +63,14 @@ The generated handover files are local by default. They can include machine-spec
 ## Requirements
 
 - Node.js **18 or later**
-- npm
+- npm and Git
 - The agent(s) you want to use:
   - **Claude Code** CLI (`claude` on your `PATH`) — for Claude integration
+  - **Muse Code** (`muse`, native or WSL) — Muse integration
   - **Codex CLI** (`codex` on your `PATH`) — for Codex integration
 - Windows, macOS, or Linux
 
-You do not need both agents. `pbhandover on` auto-detects which agents are present and enables only those.
+You do not need all enabled agents. `pbhandover on` auto-detects which agents are present and enables only those.
 
 On Windows, run commands in PowerShell or Command Prompt. On macOS/Linux, use Terminal, bash, or zsh.
 
@@ -94,7 +95,7 @@ Global installation does **not** automatically enable handover generation for al
    pbhandover on
    ```
 
-   With no agent flags this **auto-detects** agents: it enables every agent whose project dir (`.claude` / `.codex`) exists, or whose CLI is installed. If none is detected, it falls back to enabling all known agents.
+   With no agent flags this **auto-detects** agents: it enables every agent whose project dir (`.claude` / `.codex` / `.muse`) exists, or whose CLI is installed. If none is detected, install an agent or select an adapter explicitly.
 
 3. Check the setup:
 
@@ -136,10 +137,10 @@ Only this fixed set of subcommands is routed: `on`, `off`, `status`, `doctor`, `
 | Command | What it does |
 | --- | --- |
 | `pbhandover setup [--force] [--no-router]` | Create the shared user `template.md`, `prompt.md`, and `config.json`, and install the `@handover` command router (+ `/handover` slash command) for every available agent. `--force` overwrites the shared template/prompt with package defaults. `--no-router` skips router installation. |
-| `pbhandover on [--claude] [--codex] [--track-handover] [--track-hooks] [--force-template]` | Enable the Stop hook in the current project. No agent flag → **auto-detect** (see [Quickstart](#quickstart)). Creates `.pbhandover/`, the project template/prompt/config, `HANDOVER.md`, and each selected agent's Stop hook. Updates `.gitignore`. |
-| `pbhandover off [--claude] [--codex]` | Disable this tool's Stop hook in the current project. No flag → all currently configured agents. Leaves `HANDOVER.md` and `.pbhandover/` in place. |
+| `pbhandover on [--claude] [--codex] [--muse] [--track-handover] [--track-hooks] [--force-template]` | Enable the Stop hook in the current project. No agent flag → **auto-detect** (see [Quickstart](#quickstart)). Creates `.pbhandover/`, the project template/prompt/config, `HANDOVER.md`, and each selected agent's Stop hook. Updates private Git exclusions. |
+| `pbhandover off [--claude] [--codex] [--muse]` | Disable this tool's Stop hook in the current project. No flag → all currently configured agents. Leaves `HANDOVER.md` and `.pbhandover/` in place. |
 | `pbhandover status` (alias `doctor`) | Show global ON/OFF, the handover/template paths, queue counts (pending/done/failed), and per-agent `enabled` / `model` / `available` / hook-file status. |
-| `pbhandover router install\|uninstall\|status [--claude] [--codex]` | Manage the `@handover` `UserPromptSubmit` router and the `/handover` slash command. No flag → available agents for install/uninstall; `status` always reports all agents. |
+| `pbhandover router install\|uninstall\|status [--claude] [--codex] [--muse]` | Manage the `@handover` `UserPromptSubmit` router and the `/handover` slash command. No flag → available agents for install/uninstall; `status` always reports all agents. |
 | `pbhandover trust` | Trust this tool's installed Codex hooks (writes `[hooks.state.*]` entries into `~/.codex/config.toml`). |
 | `pbhandover enqueue --agent claude\|codex` | **Internal** Stop hook entrypoint. Writes one queued job and spawns the worker, then returns. You normally do not run this manually. |
 | `pbhandover worker` | **Internal.** Process queued jobs sequentially in the background. |
@@ -150,9 +151,9 @@ Only this fixed set of subcommands is routed: `on`, `off`, `status`, `doctor`, `
 
 ### `on` options
 
-- `--claude` / `--codex` — enable only the named agent(s). With neither flag, agents are auto-detected.
-- `--track-handover` — keep `HANDOVER.md` out of `.gitignore` (by default it is ignored).
-- `--track-hooks` — keep the agent hook files out of `.gitignore`.
+- `--claude` / `--codex` / `--muse` — enable only the named agent(s). With no agent flags, agents are auto-detected.
+- `--track-handover` — create a repository-local tracking exception for `HANDOVER.md`.
+- `--track-hooks` — create repository-local tracking exceptions for agent hook files.
 - `--force-template` — overwrite the project-local template and prompt from the shared user copies.
 
 ## How it works (architecture)
@@ -210,7 +211,7 @@ your-project/
   Agent finishes a turn (Claude Code or Codex)
             │
             ▼
-  Stop hook fires ──► pbhandover enqueue --agent <claude|codex>
+  Stop hook fires ──► pbhandover enqueue --agent <claude|codex|muse>
             │            • recursion guards check (see below)
             │            • writes ONE job into .pbhandover/queue/
             │            • spawns a detached background worker
@@ -229,7 +230,7 @@ your-project/
             ▼
      runSummarizer() with the SAME agent that fired the hook
        • claude: claude -p --model <model> --output-format text
-       • codex:  codex exec --model <model> --output-last-message ...
+       • codex:  codex exec [--model <model>] --output-last-message ...
        (worker sets PBHANDOVER_WORKER=1 so the agent's own Stop
         hook is a no-op — this breaks the recursion)
             │
@@ -250,7 +251,7 @@ Each Stop hook tags its job with the agent that fired it (`--agent claude` or `-
 | Agent | Default summarizer model | Headless invocation |
 | --- | --- | --- |
 | Claude Code | `claude-haiku-4-5-20251001` | `claude -p --model <model> --dangerously-skip-permissions --output-format text` (summary captured from stdout) |
-| Codex CLI | `gpt-5.3-codex-spark` | `codex --disable hooks --model <model> --sandbox workspace-write --ask-for-approval never exec --skip-git-repo-check --output-last-message <file> -` |
+| Codex CLI | `CLI default (no model override)` | `codex --disable hooks [--model <model>] --sandbox workspace-write --ask-for-approval never exec --skip-git-repo-check --output-last-message <file> -` |
 
 Models are configurable per agent in `.pbhandover/config.json` (see [Configuration](#configuration)).
 
@@ -282,7 +283,7 @@ Redaction covers queued payloads, the transcript tail, the existing `HANDOVER.md
 
 When the worker builds a prompt it reads, in priority order: the project-local template → falling back to the bundled default. Because the template is read per job, editing `.pbhandover/template.md` changes the next handover update. Edit the project-local template when one project needs a different format; edit the user-level shared template to change the default for future projects.
 
-The default template is in Japanese and has ten sections (project purpose; current work/tasks; commands run; successes/completed tasks; failures/errors; suspected causes; attempted fixes; next actions/backlog; cautions; other notable items), plus a "last updated" line and an "agent" field that records which agent (claude or codex) produced the update.
+The default template is in Japanese and has ten sections (project purpose; current work/tasks; commands run; successes/completed tasks; failures/errors; suspected causes; attempted fixes; next actions/backlog; cautions; other notable items), plus a "last updated" line and an "agent" field that records which agent (claude, codex, or muse) produced the update.
 
 ## Configuration
 
@@ -297,7 +298,8 @@ Created by `setup`:
   "redactSecrets": true,
   "agents": {
     "claude": { "enabled": false, "model": "claude-haiku-4-5-20251001" },
-    "codex":  { "enabled": false, "model": "gpt-5.3-codex-spark" }
+    "codex":  { "enabled": false, "model": null },
+    "muse":   { "enabled": false, "model": null }
   }
 }
 ```
@@ -317,7 +319,8 @@ Created/updated by `on`:
   "promptFile": ".pbhandover/prompt.md",
   "agents": {
     "claude": { "enabled": true, "model": "claude-haiku-4-5-20251001" },
-    "codex":  { "enabled": true, "model": "gpt-5.3-codex-spark" }
+    "codex":  { "enabled": true, "model": null },
+    "muse":   { "enabled": true, "model": null }
   }
 }
 ```
@@ -325,7 +328,7 @@ Created/updated by `on`:
 - `enabled` — whether the project has handover enabled at all (true if any agent is enabled).
 - `agents.<name>.enabled` — per-agent on/off.
 - `agents.<name>.model` — the model used to summarize that agent's turns. Change it to any model id/alias the agent accepts.
-- `trackHandover` / `trackHooks` — whether `HANDOVER.md` and the hook files are kept out of `.gitignore`.
+- `trackHandover` / `trackHooks` — whether repository-local tracking exceptions are requested.
 - `workerTimeoutMs` (optional) — per-job summarizer timeout in milliseconds. Defaults to `600000` (10 minutes) when unset.
 
 ## Environment variables
@@ -416,15 +419,146 @@ node bin/pbhandover.js --help
 
 ## Privacy & Git
 
-By default, `on` adds the following to `.gitignore`:
+`on` adds runtime exclusions to the user's global Git exclusion file
+(`core.excludesFile`), creating `~/.gitignore_global` and configuring Git if
+necessary. It does not write private paths or comments into public `.gitignore`.
+Configure exclusions on each machine. Ignoring files does not untrack files that
+are already committed.
 
-```gitignore
-/HANDOVER.md
-.pbhandover/
-.claude/settings.local.json   # when Claude is enabled
-.codex/hooks.json             # when Codex is enabled
+Exclusions cover handover notes, backups, temporary files, runtime state, personal
+hook settings, and common secret-file patterns. `--track-handover` and
+`--track-hooks` write repository-local exceptions into `.git/info/exclude` when a
+Git repository exists. Higher-priority ignore rules may still apply; inspect them
+with `git check-ignore -v`.
+
+Redaction is best effort. Review output before sharing it. Never commit private
+transcripts, credentials, or machine-specific bridge configuration. Use `local/`
+for non-distributed local work.
+
+## Muse Code (native and Windows + WSL)
+
+Version 0.2 adds a third adapter, `muse`. Windows can run pbhandover with Windows
+Node.js while Muse runs inside a WSL Linux distribution. Both use the same project
+queue, lock, and `HANDOVER.md`; Linux Node.js is not required for this bridge.
+
+### Requirements and setup
+
+- pbhandover: Node.js 18 or newer and Git.
+- Muse: a working `muse` installation with native plugin capabilities and `exec`.
+- Windows bridge: WSL, Python 3 and `wslpath` in the selected distribution, and
+  Windows executable interop enabled.
+- Muse authentication and a usable model are configured separately in Muse.
+
+From a Windows terminal in the shared project:
+
+```powershell
+pbhandover on --muse
+pbhandover status
 ```
 
-`HANDOVER.md` is anchored with a leading `/` so it only matches the repo-root file (important on case-insensitive filesystems). Use `--track-handover` / `--track-hooks` to keep those files tracked.
+To enable all three explicitly:
 
-Keep secrets out of handover files, queue files, prompts, templates, and logs: API keys, tokens, passwords, `.env` contents, private keys, internal server names, and personal or customer data. Payloads, transcript tails, and captured output are passed through a redaction filter, but always review generated files before sharing a repository, issue reproduction, or support bundle.
+```powershell
+pbhandover on --claude --codex --muse
+```
+
+By default, Windows looks for native Muse first, then searches installed WSL
+Linux distributions (excluding Docker Desktop distributions). To select one:
+
+```powershell
+$env:PBHANDOVER_WSL_DISTRO = 'Ubuntu'
+pbhandover on --muse
+```
+
+Use a name from `wsl --list --quiet`. `PBHANDOVER_MUSE_BIN` overrides a native Muse
+executable; if that explicit override is missing, detection reports unavailable
+instead of silently selecting WSL. The other executable overrides remain
+`PBHANDOVER_CLAUDE_BIN` and `PBHANDOVER_CODEX_BIN`.
+
+For native Linux/macOS, install Node.js and Muse in the same environment and run
+the same CLI commands without the Windows bridge.
+
+### Plugin registration and commands
+
+The adapter generates a native Muse plugin, validates it with `muse plugins
+validate`, installs it at user scope, then approves only the pbhandover plugin's
+capabilities. It contains `Stop` and `UserPromptSubmit` hooks. It does not rely on
+a guessed `.muse/hooks.json` format or a `muse hooks` command.
+
+The user plugin is shared across projects. Its Stop hook only queues jobs for
+projects whose pbhandover configuration enables `muse`. Therefore `off --muse`
+disables this project's generation while keeping `@handover` available. Removing
+the Muse router removes that shared plugin and its Stop hook for all projects:
+
+```sh
+pbhandover router install --muse
+pbhandover router status
+pbhandover router uninstall --muse
+```
+
+Inside Muse, use `@handover on`, `@handover off`, `@handover status`, or `@handover
+flush`. `setup` and `doctor` are also recognized. The prompt hook executes the
+command locally and passes the result as additional context for Muse to display.
+It does not return a block decision, which Muse displays as an interrupted turn.
+Reporting the result uses a model response; ordinary prompts pass through. The native `/handover` slash command remains Claude-only.
+Restart already-running agent sessions after installing or changing hooks.
+
+### WSL bridge and summarization
+
+The generated plugin lives under `~/.pbhandover/muse-plugin` on the pbhandover host.
+Its Python bridge runs from Muse's verified plugin cache, translates the payload's
+working directory and transcript path using `wslpath`, then invokes Windows Node.
+This also supports WSL-owned transcript paths through Windows WSL filesystem
+access. Python bytecode generation is disabled to preserve the plugin cache hash.
+
+The worker invokes `muse exec --workspace ... --prompt-file ... --session-id ...
+--approval-mode never --no-foreign-personal-context --disable-web-tools`. Sandbox
+settings remain Muse's defaults. Output writes that Muse policy denies cause the
+job to fail; there is no automatic sandbox bypass. The default model is Muse's
+configured default. Set `agents.muse.model` in the project config to override it.
+
+Muse filters hook environments, so a worker's environment variable alone cannot
+prevent recursion. pbhandover records each summarizer's session ID under the
+project's runtime `worker-sessions/` directory before launch. Its hooks ignore
+those sessions even when `PBHANDOVER_WORKER` is absent. Keep those marker files
+while related sessions may still emit hooks.
+
+The worker writes a translated `muse-prompt.md` and captures the final process
+output in `last-muse-message.txt`. A zero exit without a changed handover is
+recorded as failure, not a successful update. Malformed queue JSON is moved to
+`failed/` so it cannot trap processing of later jobs.
+
+## Compatibility verification
+
+Verified versions:
+
+| Agent | Version checked | Checks |
+| --- | --- | --- |
+| Claude Code | 2.1.263 | Latest npm release executable; headless arguments; current hook contract |
+| Codex CLI | 0.153.4 | Installed/npm release; exec arguments; live hook discovery, trust configuration, and successful background updates |
+| Muse Code | 1.0.3 (1.0.3-R2198.1) | WSL executable; plugin validation/approval; actual Stop and prompt hook runner; headless execution; successful live background handover update |
+
+The automated suite uses fake summarizers and temporary projects. It checks
+configuration preservation, CRLF/duplicate trust entries, queue processing,
+redaction, recursion guards, and router responses without spending model quota.
+A live Muse Stop event also triggered the normal background summarizer and
+successfully changed HANDOVER.md. Codex background updates also succeeded after switching an existing model override
+to the CLI default. Claude model-generated updates were not exercised.
+
+New Codex configurations no longer pin Spark: a null/omitted model uses the CLI's
+configured default. Existing explicitly configured models are preserved. If an
+existing Spark configuration hits its separate usage limit, choose an available
+model in `agents.codex.model`, or set it to null to use the CLI default. There is
+no automatic fallback to a different model or provider.
+
+The Codex trust updater handles LF/CRLF, replaces duplicate entries for the same
+hook, and preserves other TOML tables. Agent executable detection checks actual
+files; native Claude installations and npm Codex shims are supported. Hook changes
+preserve unrelated handlers even when they share a matcher group.
+
+References: [Claude hook reference](https://code.claude.com/docs/en/hooks),
+[Claude CLI reference](https://code.claude.com/docs/en/cli-reference),
+[Codex hooks](https://learn.chatgpt.com/docs/hooks),
+[Muse Code](https://dev.meta.ai/docs/muse-code/). Muse-specific registration was
+also verified against the installed executable's native plugin contract and CLI
+validator because access to its web documentation may require login.

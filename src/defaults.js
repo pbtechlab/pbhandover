@@ -24,7 +24,7 @@ const WORKER_ENV = "PBHANDOVER_WORKER";
 const NO_WORKER_ENV = "PBHANDOVER_NO_WORKER";
 
 // Known agent adapters. Order matters for auto-detection display.
-const AGENTS = ["claude", "codex"];
+const AGENTS = ["claude", "codex", "muse"];
 
 module.exports = {
   AGENTS,

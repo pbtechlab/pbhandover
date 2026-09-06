@@ -14,6 +14,8 @@ const {
   writeText
 } = require("../fs-utils");
 const { buildSelfCommand } = require("../shell");
+const { resolveAgent, runExecutable } = require("../executables");
+const { removeHandlers, upsertTrust } = require("../hook-utils");
 
 const NAME = "claude";
 const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
@@ -85,14 +87,14 @@ module.exports = {
     const data = readJson(settingsFile, {});
     data.hooks = data.hooks || {};
     const promptHooks = Array.isArray(data.hooks.UserPromptSubmit) ? data.hooks.UserPromptSubmit : [];
-    const filtered = promptHooks.filter((group) => !groupMatches(group, isRouterHandler));
+    const filtered = removeHandlers(promptHooks, isRouterHandler);
     filtered.push({
       matcher: "",
       hooks: [
         {
           type: "command",
           command: buildSelfCommand(["prompt-router", "--agent", NAME]),
-          timeout: 10
+          timeout: 65
         }
       ]
     });
@@ -110,7 +112,7 @@ module.exports = {
     const data = readJson(settingsFile, {});
     data.hooks = data.hooks || {};
     const promptHooks = Array.isArray(data.hooks.UserPromptSubmit) ? data.hooks.UserPromptSubmit : [];
-    const filtered = promptHooks.filter((group) => !groupMatches(group, isRouterHandler));
+    const filtered = removeHandlers(promptHooks, isRouterHandler);
     if (filtered.length > 0) data.hooks.UserPromptSubmit = filtered;
     else delete data.hooks.UserPromptSubmit;
     if (data.hooks && Object.keys(data.hooks).length === 0) delete data.hooks;
@@ -141,20 +143,19 @@ module.exports = {
   },
 
   runSummarizer({ root, model, prompt, timeout }) {
-    const claude = resolveClaudeBin() || { command: "claude", args: [], shell: process.platform === "win32" };
-    return childProcess.spawnSync(claude.command, claude.args.concat([
+    const claude = resolveClaudeBin();
+    return runExecutable(claude, [
       "-p",
       "--model",
       model,
       "--dangerously-skip-permissions",
       "--output-format",
       "text"
-    ]), {
+    ], {
       cwd: root,
       input: prompt,
       encoding: "utf8",
       env: { ...process.env, [WORKER_ENV]: "1" },
-      shell: claude.shell,
       windowsHide: true,
       timeout,
       maxBuffer: 10 * 1024 * 1024
@@ -176,7 +177,7 @@ function setStopHook(settingsFile, enabled) {
   const data = readJson(settingsFile, {});
   data.hooks = data.hooks || {};
   const stop = Array.isArray(data.hooks.Stop) ? data.hooks.Stop : [];
-  const filtered = stop.filter((group) => !groupMatches(group, isEnqueueHandler));
+  const filtered = removeHandlers(stop, isEnqueueHandler);
 
   if (enabled) {
     filtered.push({
@@ -185,7 +186,7 @@ function setStopHook(settingsFile, enabled) {
         {
           type: "command",
           command: buildSelfCommand(["enqueue", "--agent", NAME]),
-          timeout: 5
+          timeout: 10
         }
       ]
     });
@@ -205,16 +206,5 @@ function installSlashCommand() {
 }
 
 function resolveClaudeBin() {
-  const override = process.env.PBHANDOVER_CLAUDE_BIN;
-  if (override) return { command: override, args: [], shell: process.platform === "win32" };
-  if (process.platform === "win32") {
-    for (const candidate of [
-      path.join(process.env.APPDATA || "", "npm", "claude.cmd"),
-      path.join(process.env.LOCALAPPDATA || "", "Programs", "claude", "claude.exe")
-    ]) {
-      if (candidate && fs.existsSync(candidate)) return { command: candidate, args: [], shell: true };
-    }
-    return { command: "claude", args: [], shell: true };
-  }
-  return { command: "claude", args: [], shell: false };
+  return resolveAgent("claude");
 }

@@ -1,6 +1,6 @@
 # pbhandover
 
-`pbhandover` は、**1 つの共有 `HANDOVER.md`**（プロジェクトの引き継ぎメモ）を **Claude Code と Codex CLI の両方** に対して自動で最新に保つ、単一の npm CLI です。各エージェントの **Stop フック** を利用して動作し、**ノンブロッキング** です。ターンが終わると、フックはごく小さなジョブをキューに入れてすぐに戻ります。その後、デタッチされたバックグラウンドワーカーが（ヘッドレスモードの）エージェントに直近ターンの要約を依頼し、`HANDOVER.md` を更新します。エージェントは引き継ぎ更新を待ちません。
+`pbhandover` は、**1 つの共有 `HANDOVER.md`**（プロジェクトの引き継ぎメモ）を **Claude Code・Codex CLI・Muse Code** に対して自動で最新に保つ、単一の npm CLI です。各エージェントの **Stop フック** を利用して動作し、**ノンブロッキング** です。ターンが終わると、フックはごく小さなジョブをキューに入れてすぐに戻ります。その後、デタッチされたバックグラウンドワーカーが（ヘッドレスモードの）エージェントに直近ターンの要約を依頼し、`HANDOVER.md` を更新します。エージェントは引き継ぎ更新を待ちません。
 
 English version: [README.md](README.md)
 
@@ -53,9 +53,9 @@ English version: [README.md](README.md)
 ## 特長
 
 - **プロジェクトごとに 1 つの共有状態ディレクトリ** — `.pbhandover/` に設定・テンプレート・プロンプト・キュー・ログ・ワーカーロックをまとめます。
-- **1 つの共有 `HANDOVER.md`** — プロジェクトルートに置かれ、両方のエージェントが読み書きします。
+- **1 つの共有 `HANDOVER.md`** — プロジェクトルートに置かれ、有効なエージェントが読み書きします。
 - **発火エージェント別の要約** — 各 Stop フックは、どのエージェントが発火したかをジョブにタグ付けします（`--agent claude` / `--agent codex`）。ワーカーは **同じ** エージェントで要約します（Claude のターンは Claude、Codex のターンは Codex）。モデルはエージェントごとに設定可能です。
-- **セッション内での操作** — Claude Code / Codex のセッション内で `@handover on|off|status|flush`（および `setup`/`doctor`）を直接入力できます。Claude Code はネイティブの `/handover` スラッシュコマンドにも対応します。
+- **セッション内での操作** — Claude Code / Codex / Muse Code のセッション内で `@handover on|off|status|flush`（および `setup`/`doctor`）を直接入力できます。Claude Code はネイティブの `/handover` スラッシュコマンドにも対応します。
 - **ノンブロッキング** — Stop フックはキューに入れるだけ。ワーカーはバックグラウンドでデタッチ実行されます。
 - **再帰安全** — ワーカー自身のエージェント実行が、引き継ぎの無限ループを引き起こさないようガードします。
 - **シークレットの墨消し** — API キー、トークン、シークレット、パスワード、`Bearer` トークン、`sk-...` キーを、キューのペイロード・トランスクリプト・取得した出力から除去します。
@@ -63,13 +63,14 @@ English version: [README.md](README.md)
 ## 動作要件
 
 - Node.js **18 以上**
-- npm
+- npm、Git
 - 使いたいエージェント:
   - **Claude Code** CLI（`PATH` 上に `claude`）— Claude 連携用
+  - **Muse Code**（`muse`、ネイティブまたはWSL）— Muse 連携用
   - **Codex CLI**（`PATH` 上に `codex`）— Codex 連携用
 - Windows / macOS / Linux
 
-両方のエージェントは必須ではありません。`pbhandover on` は存在するエージェントを自動検出し、該当するものだけを有効化します。
+使うエージェントだけを用意すれば動作します。`pbhandover on` は存在するエージェントを自動検出し、該当するものだけを有効化します。
 
 Windows では PowerShell またはコマンドプロンプトで実行してください。macOS/Linux ではターミナル、bash、zsh などを使います。
 
@@ -94,7 +95,7 @@ npm install -g pbhandover
    pbhandover on
    ```
 
-   エージェントフラグなしの場合は **自動検出** されます。プロジェクトディレクトリ（`.claude` / `.codex`）が存在するか、CLI がインストールされているエージェントをすべて有効化します。いずれも検出されない場合は、既知の全エージェントを有効化するフォールバックになります。
+   エージェントフラグなしの場合は **自動検出** されます。プロジェクトディレクトリ（`.claude` / `.codex` / `.muse`）が存在するか、CLI がインストールされているエージェントをすべて有効化します。いずれも検出されない場合は、エージェントを導入するか対象を明示してください。
 
 3. 設定を確認します。
 
@@ -136,10 +137,10 @@ npm install -g pbhandover
 | コマンド | 説明 |
 | --- | --- |
 | `pbhandover setup [--force] [--no-router]` | 共有ユーザーの `template.md` / `prompt.md` / `config.json` を作成し、利用可能な全エージェントに `@handover` コマンドルーター（+ `/handover` スラッシュコマンド）をインストールします。`--force` は共有テンプレート/プロンプトをパッケージ既定で上書き。`--no-router` はルーター導入をスキップ。 |
-| `pbhandover on [--claude] [--codex] [--track-handover] [--track-hooks] [--force-template]` | 現在のプロジェクトで Stop フックを有効化します。エージェントフラグなし → **自動検出**（[クイックスタート](#クイックスタート)参照）。`.pbhandover/`、プロジェクトのテンプレート/プロンプト/設定、`HANDOVER.md`、選択した各エージェントの Stop フックを作成し、`.gitignore` を更新します。 |
-| `pbhandover off [--claude] [--codex]` | 現在のプロジェクトで本ツールの Stop フックを無効化します。フラグなし → 現在構成済みの全エージェント。`HANDOVER.md` と `.pbhandover/` はそのまま残します。 |
+| `pbhandover on [--claude] [--codex] [--muse] [--track-handover] [--track-hooks] [--force-template]` | 現在のプロジェクトで Stop フックを有効化します。エージェントフラグなし → **自動検出**（[クイックスタート](#クイックスタート)参照）。`.pbhandover/`、プロジェクトのテンプレート/プロンプト/設定、`HANDOVER.md`、選択した各エージェントの Stop フックを作成し、非公開の Git 除外設定を更新します。 |
+| `pbhandover off [--claude] [--codex] [--muse]` | 現在のプロジェクトで本ツールの Stop フックを無効化します。フラグなし → 現在構成済みの全エージェント。`HANDOVER.md` と `.pbhandover/` はそのまま残します。 |
 | `pbhandover status`（別名 `doctor`） | 全体の ON/OFF、引き継ぎ/テンプレートのパス、キュー件数（pending/done/failed）、各エージェントの `enabled` / `model` / `available` / フックファイル状況を表示します。 |
-| `pbhandover router install\|uninstall\|status [--claude] [--codex]` | `@handover` の `UserPromptSubmit` ルーターと `/handover` スラッシュコマンドを管理します。install/uninstall はフラグなしで利用可能エージェント対象。`status` は常に全エージェントを報告。 |
+| `pbhandover router install\|uninstall\|status [--claude] [--codex] [--muse]` | `@handover` の `UserPromptSubmit` ルーターと `/handover` スラッシュコマンドを管理します。install/uninstall はフラグなしで利用可能エージェント対象。`status` は常に全エージェントを報告。 |
 | `pbhandover trust` | インストール済みの Codex フックを信頼します（`~/.codex/config.toml` に `[hooks.state.*]` を書き込み）。 |
 | `pbhandover enqueue --agent claude\|codex` | **内部用** の Stop フックエントリポイント。1 件のジョブを書き込みワーカーを起動して戻ります。通常は手動実行しません。 |
 | `pbhandover worker` | **内部用。** キュー内のジョブをバックグラウンドで順次処理します。 |
@@ -150,9 +151,9 @@ npm install -g pbhandover
 
 ### `on` のオプション
 
-- `--claude` / `--codex` — 指定したエージェントのみ有効化。どちらも指定しない場合は自動検出。
-- `--track-handover` — `HANDOVER.md` を `.gitignore` に追加しない（既定では無視されます）。
-- `--track-hooks` — エージェントのフックファイルを `.gitignore` に追加しない。
+- `--claude` / `--codex` / `--muse` — 指定したエージェントのみ有効化。どちらも指定しない場合は自動検出。
+- `--track-handover` — `HANDOVER.md` にリポジトリ単位のローカルな追跡例外を設定します。
+- `--track-hooks` — フックファイルにリポジトリ単位のローカルな追跡例外を設定します。
 - `--force-template` — 共有ユーザーのコピーから、プロジェクトのテンプレートとプロンプトを上書きします。
 
 ## 仕組み（アーキテクチャ）
@@ -210,7 +211,7 @@ your-project/
   エージェントがターンを終える（Claude Code または Codex）
             │
             ▼
-  Stop フック発火 ──► pbhandover enqueue --agent <claude|codex>
+  Stop フック発火 ──► pbhandover enqueue --agent <claude|codex|muse>
             │            ・再帰ガードを確認（下記）
             │            ・.pbhandover/queue/ にジョブを 1 件書き込む
             │            ・デタッチされたバックグラウンドワーカーを起動
@@ -229,7 +230,7 @@ your-project/
             ▼
      runSummarizer(): フックを発火したのと同じエージェントで実行
        ・claude: claude -p --model <model> --output-format text
-       ・codex:  codex exec --model <model> --output-last-message ...
+       ・codex:  codex exec [--model <model>] --output-last-message ...
        （ワーカーは PBHANDOVER_WORKER=1 を設定するため、要約に使う
          エージェントの Stop フックは何もしない — これで再帰を断つ）
             │
@@ -250,7 +251,7 @@ your-project/
 | エージェント | 既定の要約モデル | ヘッドレス実行 |
 | --- | --- | --- |
 | Claude Code | `claude-haiku-4-5-20251001` | `claude -p --model <model> --dangerously-skip-permissions --output-format text`（要約は stdout から取得） |
-| Codex CLI | `gpt-5.3-codex-spark` | `codex --disable hooks --model <model> --sandbox workspace-write --ask-for-approval never exec --skip-git-repo-check --output-last-message <file> -` |
+| Codex CLI | `CLI の既定（モデル指定なし）` | `codex --disable hooks [--model <model>] --sandbox workspace-write --ask-for-approval never exec --skip-git-repo-check --output-last-message <file> -` |
 
 モデルは `.pbhandover/config.json` でエージェントごとに設定できます（[設定](#設定)参照）。
 
@@ -282,7 +283,7 @@ your-project/
 
 ワーカーはプロンプト構築時に、優先順に「プロジェクトのテンプレート → バンドルされた既定」を読み込みます。テンプレートはジョブごとに読まれるため、`.pbhandover/template.md` を編集すると次回の引き継ぎ更新に反映されます。特定プロジェクトで別形式が必要ならプロジェクトのテンプレートを、今後のプロジェクトの既定を変えたいならユーザー共有テンプレートを編集してください。
 
-既定のテンプレートは日本語で、10 セクション（プロジェクトの目的／現在の作業・タスク／実行したコマンド／成功・完了タスク／失敗・エラー／疑っている原因／試した対処／次にやること・積まれているタスク／注意点／その他重要な特記事項）に加え、「最終更新」行と、どのエージェント（claude / codex）が更新したかを記録する「エージェント」欄を持ちます。
+既定のテンプレートは日本語で、10 セクション（プロジェクトの目的／現在の作業・タスク／実行したコマンド／成功・完了タスク／失敗・エラー／疑っている原因／試した対処／次にやること・積まれているタスク／注意点／その他重要な特記事項）に加え、「最終更新」行と、どのエージェント（claude / codex / muse）が更新したかを記録する「エージェント」欄を持ちます。
 
 ## 設定
 
@@ -297,7 +298,8 @@ your-project/
   "redactSecrets": true,
   "agents": {
     "claude": { "enabled": false, "model": "claude-haiku-4-5-20251001" },
-    "codex":  { "enabled": false, "model": "gpt-5.3-codex-spark" }
+    "codex":  { "enabled": false, "model": null },
+    "muse":   { "enabled": false, "model": null }
   }
 }
 ```
@@ -317,7 +319,8 @@ your-project/
   "promptFile": ".pbhandover/prompt.md",
   "agents": {
     "claude": { "enabled": true, "model": "claude-haiku-4-5-20251001" },
-    "codex":  { "enabled": true, "model": "gpt-5.3-codex-spark" }
+    "codex":  { "enabled": true, "model": null },
+    "muse":   { "enabled": true, "model": null }
   }
 }
 ```
@@ -325,7 +328,7 @@ your-project/
 - `enabled` — プロジェクトで引き継ぎが有効かどうか（いずれかのエージェントが有効なら true）。
 - `agents.<name>.enabled` — エージェントごとの ON/OFF。
 - `agents.<name>.model` — そのエージェントのターンを要約するモデル。エージェントが受け付ける任意のモデル ID/エイリアスに変更できます。
-- `trackHandover` / `trackHooks` — `HANDOVER.md` とフックファイルを `.gitignore` から除外しないか。
+- `trackHandover` / `trackHooks` — 引き継ぎとフックファイルにローカルな追跡例外を設定するか。
 - `workerTimeoutMs`（任意）— ジョブ単位の要約タイムアウト（ミリ秒）。未設定時は `600000`（10 分）。
 
 ## 環境変数
@@ -416,15 +419,85 @@ node bin/pbhandover.js --help
 
 ## プライバシーと Git
 
-既定では、`on` は次を `.gitignore` に追加します。
+生成ファイルは既定でローカル扱いです。`on` は Git の `core.excludesFile` が指すユーザー共通除外ファイルを更新します。未設定なら `~/.gitignore_global` を作成して Git に設定します。公開 `.gitignore` には内部パスや運用コメントを書き加えません。新しいPCでも設定が必要です。除外しても追跡済みファイルは自動で追跡解除されません。
 
-```gitignore
-/HANDOVER.md
-.pbhandover/
-.claude/settings.local.json   # Claude 有効時
-.codex/hooks.json             # Codex 有効時
+除外対象は引き継ぎ・バックアップ・一時ファイル・実行状態・個人用フック設定・一般的な秘密ファイルです。`--track-handover` / `--track-hooks` は、Git リポジトリが存在する場合に `.git/info/exclude` にローカルな追跡例外を設定します。上位の除外規則がある場合は `git check-ignore -v` で確認してください。
+
+墨消しは完全な保証ではありません。共有前に生成文書とログを確認してください。認証情報・私的な会話ログ・マシン固有のブリッジ設定を公開しないでください。配布しない作業物は `local/` に置きます。
+
+## Muse Code 対応（ネイティブ／Windows＋WSL）
+
+0.2 で `muse` アダプタを追加しました。Windows の Node.js で pbhandover を動かし、WSL 内の Muse Code と共通の `HANDOVER.md`・キュー・ロックを使えます。このブリッジでは WSL 側の Node.js は不要です。
+
+### 必要な環境と有効化
+
+- pbhandover：Node.js 18以上、Git。
+- Muse：ネイティブプラグインと `exec` を備えた `muse`。
+- Windows ブリッジ：WSL、対象ディストリビューション内の Python 3 と `wslpath`、Windows 実行ファイルの相互運用。
+- Muse の認証と利用可能なモデルは Muse 側で設定します。
+
+共有プロジェクト内の Windows ターミナルで実行します。
+
+```powershell
+pbhandover on --muse
+pbhandover status
 ```
 
-`HANDOVER.md` は先頭の `/` でアンカーされ、リポジトリルートのファイルだけに一致します（大文字小文字を区別しないファイルシステムで重要）。これらをトラッキングしたい場合は `--track-handover` / `--track-hooks` を使ってください。
+3種類を明示的に有効にする場合：
 
-引き継ぎファイル・キューファイル・プロンプト・テンプレート・ログにシークレットを残さないでください。API キー、トークン、パスワード、`.env` の内容、秘密鍵、内部サーバー名、個人・顧客データなどです。ペイロード・トランスクリプト末尾・取得出力は墨消しフィルターを通りますが、リポジトリ・再現手順・サポートバンドルを共有する前に、生成ファイルを必ず確認してください。
+```powershell
+pbhandover on --claude --codex --muse
+```
+
+Windows ネイティブの Muse を先に探し、見つからなければ WSL の Linux ディストリビューションを調べます。Docker Desktop のディストリビューションは除外します。複数ある場合は次で指定できます。
+
+```powershell
+$env:PBHANDOVER_WSL_DISTRO = 'Ubuntu'
+pbhandover on --muse
+```
+
+実際の名前は `wsl --list --quiet` で確認してください。`PBHANDOVER_MUSE_BIN` はネイティブ実行ファイルの上書きです。明示された上書きが存在しない場合は、WSLへ自動切替せず未検出と表示します。既存の `PBHANDOVER_CLAUDE_BIN` / `PBHANDOVER_CODEX_BIN` も利用できます。
+
+Linux/macOS ネイティブでは同じ環境に Node.js と Muse を用意し、通常の CLI コマンドで有効化します。
+
+### プラグインとセッション内コマンド
+
+アダプタは Muse ネイティブプラグインを生成し、`muse plugins validate` で検証、ユーザー単位でインストールし、pbhandover 自身の機能だけを承認します。`Stop` と `UserPromptSubmit` を登録します。推測した `.muse/hooks.json` や `muse hooks` コマンドには依存しません。
+
+プラグインはユーザー単位で共通ですが、Stop フックは対象プロジェクトで `agents.muse.enabled` が有効な場合だけジョブを登録します。`off --muse` でそのプロジェクトの生成を停止しても、`@handover` は残ります。ルーター削除は共通プラグインを削除するため、全プロジェクトの Muse フックも停止します。
+
+```sh
+pbhandover router install --muse
+pbhandover router status
+pbhandover router uninstall --muse
+```
+
+Muse 内では `@handover on` / `off` / `status` / `flush`、および `setup` / `doctor` を使えます。フックがコマンドをローカル実行し、結果を追加コンテキストとして Muse に渡して表示させます。Muse が「Interrupted」と表示する block 判定は返しません。結果表示にはモデルの応答を使います。通常のプロンプトはそのまま通します。ネイティブ `/handover` スラッシュコマンドは Claude 専用です。設定変更後は起動済みエージェントのセッションを再起動してください。
+
+### WSL ブリッジと要約処理
+
+生成プラグインは pbhandover ホストの `~/.pbhandover/muse-plugin` に置かれます。Muse の検証済みキャッシュで Python ブリッジが動き、フックの作業ディレクトリと会話ログパスを `wslpath` で Windows 形式に変換して、Windows の Node.js を呼び出します。WSL 内の会話ログも Windows の WSL ファイルアクセスを通して参照します。キャッシュのハッシュを変えないよう Python バイトコード生成を抑止しています。
+
+ワーカーは `muse exec --workspace ... --prompt-file ... --session-id ... --approval-mode never --no-foreign-personal-context --disable-web-tools` を使用します。サンドボックスは Muse の既定を維持します。ポリシーにより書き込みが拒否されたジョブは失敗扱いとなり、自動でサンドボックスを解除しません。モデルは Muse の既定です。変更する場合はプロジェクト設定の `agents.muse.model` にモデルIDを設定します。
+
+Muse はフック環境変数を制限します。環境変数だけに頼らず、起動前に要約セッションIDを実行状態内の `worker-sessions/` に記録します。`PBHANDOVER_WORKER` が渡らなくても、そのセッションのフックは無視されます。該当セッションがフックを発火しうる間は記録を保持してください。
+
+変換済みプロンプトは `muse-prompt.md`、実行出力は `last-muse-message.txt` に記録します。終了コード0でも引き継ぎファイルが変わっていなければ失敗として記録します。壊れたキューJSONは `failed/` へ分離し、後続処理を妨げません。
+
+## 互換性の検証範囲
+
+検証済みバージョン：
+
+| エージェント | 確認バージョン | 確認内容 |
+| --- | --- | --- |
+| Claude Code | 2.1.263 | npm最新公開版の実行ファイル、非対話起動引数、現行フック仕様 |
+| Codex CLI | 0.153.4 | インストール版とnpm公開版、起動引数、実フック検出と信頼設定、実モデル更新 |
+| Muse Code | 1.0.3（1.0.3-R2198.1） | WSL実機、プラグイン検証・承認、Stop／プロンプトの実フック検証、非対話実行、実モデルによるバックグラウンド更新 |
+
+自動テストは一時プロジェクトと模擬要約器を使い、モデルの利用枠を消費せず設定保持・CRLF／重複信頼設定・キュー処理・墨消し・再帰防止・ルーター応答を確認します。Muse の実 Stop イベントから通常のバックグラウンド要約も発火し、実モデルによる HANDOVER.md 更新が成功しました。Codex も既存のモデル固定を解除して CLI の既定を使用した状態で実モデル更新に成功しています。Claude の実モデルによる生成は今回の検証対象に含めていません。
+
+新規 Codex 設定では Spark 固定を廃止し、モデル未指定／null は Codex CLI の既定を使います。既存の明示的なモデル指定は維持します。Spark 固定環境で独立した利用上限に達した場合は `agents.codex.model` に利用可能なモデルを設定するか、null で既定に戻してください。別モデル・別プロバイダーへ自動では切り替えません。
+
+Codex の信頼設定更新は LF／CRLF と同一フックの重複を扱い、他の TOML テーブルを保持します。実行ファイルの検出は実ファイルを確認し、Claude ネイティブ版と Codex の npm 起動にも対応します。フック変更時は同一グループの他ツールのハンドラーを保持します。
+
+参照：[Claude フック仕様](https://code.claude.com/docs/en/hooks)、[Claude CLI](https://code.claude.com/docs/en/cli-reference)、[Codex フック仕様](https://learn.chatgpt.com/docs/hooks)、[Muse Code](https://dev.meta.ai/docs/muse-code/)。Muse のWeb資料はログインが必要な場合があるため、搭載されたネイティブプラグイン仕様と CLI 検証器でも確認しました。

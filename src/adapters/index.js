@@ -2,9 +2,10 @@
 
 const claude = require("./claude");
 const codex = require("./codex");
+const muse = require("./muse");
 const { AGENTS } = require("../defaults");
 
-const REGISTRY = { claude, codex };
+const REGISTRY = { claude, codex, muse };
 
 function getAdapter(name) {
   const adapter = REGISTRY[name];

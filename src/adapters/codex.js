@@ -14,9 +14,11 @@ const {
   writeText
 } = require("../fs-utils");
 const { buildSelfCommand } = require("../shell");
+const { resolveAgent, runExecutable } = require("../executables");
+const { removeHandlers, upsertTrust } = require("../hook-utils");
 
 const NAME = "codex";
-const DEFAULT_MODEL = "gpt-5.3-codex-spark";
+const DEFAULT_MODEL = null;
 const PROJECT_DIR = ".codex";
 const HOOKS_FILE = "hooks.json";
 
@@ -84,13 +86,13 @@ module.exports = {
     const data = readJson(hooksFile, { hooks: {} });
     data.hooks = data.hooks || {};
     const promptHooks = Array.isArray(data.hooks.UserPromptSubmit) ? data.hooks.UserPromptSubmit : [];
-    const filtered = promptHooks.filter((group) => !groupMatches(group, isRouterHandler));
+    const filtered = removeHandlers(promptHooks, isRouterHandler);
     filtered.push({
       hooks: [
         {
           type: "command",
           command: buildSelfCommand(["prompt-router", "--agent", NAME]),
-          timeout: 10,
+          timeout: 65,
           statusMessage: "Checking pbhandover command"
         }
       ]
@@ -107,7 +109,7 @@ module.exports = {
     const data = readJson(hooksFile, { hooks: {} });
     data.hooks = data.hooks || {};
     const promptHooks = Array.isArray(data.hooks.UserPromptSubmit) ? data.hooks.UserPromptSubmit : [];
-    const filtered = promptHooks.filter((group) => !groupMatches(group, isRouterHandler));
+    const filtered = removeHandlers(promptHooks, isRouterHandler);
     if (filtered.length > 0) data.hooks.UserPromptSubmit = filtered;
     else delete data.hooks.UserPromptSubmit;
     writeJson(hooksFile, data);
@@ -129,12 +131,11 @@ module.exports = {
   },
 
   runSummarizer({ root, model, prompt, outFile, timeout }) {
-    const codex = resolveCodexBin() || { command: "codex", args: [], shell: false };
-    return childProcess.spawnSync(codex.command, codex.args.concat([
+    const codex = resolveCodexBin();
+    return runExecutable(codex, [
       "--disable",
       "hooks",
-      "--model",
-      model,
+      ...(model ? ["--model", model] : []),
       "--sandbox",
       "workspace-write",
       "--ask-for-approval",
@@ -146,12 +147,11 @@ module.exports = {
       "--output-last-message",
       outFile,
       "-"
-    ]), {
+    ], {
       cwd: root,
       input: prompt,
       encoding: "utf8",
       env: { ...process.env, [WORKER_ENV]: "1" },
-      shell: codex.shell,
       windowsHide: true,
       timeout,
       maxBuffer: 10 * 1024 * 1024
@@ -182,7 +182,7 @@ function setStopHook(hooksFile, enabled) {
   const data = readJson(hooksFile, { hooks: {} });
   data.hooks = data.hooks || {};
   const stop = Array.isArray(data.hooks.Stop) ? data.hooks.Stop : [];
-  const filtered = stop.filter((group) => !groupMatches(group, isEnqueueHandler));
+  const filtered = removeHandlers(stop, isEnqueueHandler);
 
   if (enabled) {
     filtered.push({
@@ -190,7 +190,7 @@ function setStopHook(hooksFile, enabled) {
         {
           type: "command",
           command: buildSelfCommand(["enqueue", "--agent", NAME]),
-          timeout: 5,
+          timeout: 10,
           statusMessage: "Queueing HANDOVER.md update"
         }
       ]
@@ -223,7 +223,8 @@ async function trustHooks(cwd, options = {}) {
 
 function listCodexHooks(cwd) {
   return new Promise((resolve, reject) => {
-    const codex = resolveCodexBin() || { command: "codex", args: [], shell: false };
+    const codex = resolveCodexBin();
+    if (!codex) { reject(new Error("Codex executable not found")); return; }
     const child = childProcess.spawn(codex.command, codex.args.concat(["app-server", "--listen", "stdio://"]), {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
@@ -240,6 +241,7 @@ function listCodexHooks(cwd) {
       reject(new Error("Timed out waiting for Codex app-server hooks/list."));
     }, 10000);
 
+    child.stdin.on("error", () => {});
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
@@ -256,6 +258,10 @@ function listCodexHooks(cwd) {
           message = JSON.parse(line);
         } catch {
           continue;
+        }
+        if (message.error) {
+          settled = true; clearTimeout(timer); child.kill();
+          reject(new Error(message.error.message || "Codex app-server request failed")); return;
         }
         if (message.id === 0) {
           child.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
@@ -300,38 +306,9 @@ function listCodexHooks(cwd) {
 
 function upsertHookTrust(hooks) {
   const configFile = path.join(codexHomeDir(), "config.toml");
-  let text = readText(configFile, "");
-  for (const hook of hooks) {
-    const key = tomlSingleQuotedKey(String(hook.key));
-    const sectionPattern = new RegExp(`\\n?\\[hooks\\.state\\.${escapeRegExp(key)}\\]\\n(?:[^\\[]|\\[(?!hooks\\.state\\.))*`, "g");
-    const section = `[hooks.state.${key}]\ntrusted_hash = "${hook.currentHash}"\nenabled = true\n\n`;
-    if (sectionPattern.test(text)) {
-      text = text.replace(sectionPattern, `\n${section}`);
-    } else {
-      if (!/\[hooks\.state\]/.test(text)) {
-        text = `${text.replace(/\s*$/, "")}\n\n[hooks.state]\n`;
-      }
-      text = `${text.replace(/\s*$/, "")}\n\n${section}`;
-    }
-  }
-  writeText(configFile, text);
-}
-
-function tomlSingleQuotedKey(value) {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  writeText(configFile, upsertTrust(readText(configFile, ""), hooks));
 }
 
 function resolveCodexBin() {
-  const override = process.env.PBHANDOVER_CODEX_BIN;
-  if (override) return { command: override, args: [], shell: process.platform === "win32" };
-  if (process.platform === "win32") {
-    const cmd = path.join(process.env.APPDATA || "", "npm", "codex.cmd");
-    if (fs.existsSync(cmd)) return { command: cmd, args: [], shell: true };
-    return { command: "codex", args: [], shell: true };
-  }
-  return { command: "codex", args: [], shell: false };
+  return resolveAgent("codex");
 }
