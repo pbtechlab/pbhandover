@@ -72,7 +72,11 @@ module.exports = {
     if (!resolveMuse()) return false;
     try {
       const data = JSON.parse(checked(["plugins", "list", "--json"]).stdout);
-      return (data.plugins || []).some((plugin) => (plugin.id || plugin.name) === PLUGIN_ID && plugin.enabled !== false);
+      return (data.plugins || []).some((item) => {
+        const plugin = item.plugin || item;
+        return (plugin.id || plugin.name) === PLUGIN_ID &&
+          (item.record?.enabled ?? item.enabled) !== false && item.active !== false;
+      });
     } catch { return false; }
   },
   routerStatusLines() { return [`[muse] plugin: ${manifestFile()}`, `[muse] router installed: ${this.routerInstalled()}`]; },

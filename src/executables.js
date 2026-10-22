@@ -20,6 +20,10 @@ function findExecutable(name, extra = []) {
         const script = path.join(path.dirname(candidate), "node_modules", "@openai", "codex", "bin", "codex.js");
         if (fs.existsSync(script)) return { command: process.execPath, args: [script], shell: false };
       }
+      if (process.platform === "win32" && /cline\.cmd$/i.test(candidate)) {
+        const binary = path.join(path.dirname(candidate), "node_modules", "cline", "node_modules", "@cline", `cli-windows-${process.arch}`, "bin", "cline.exe");
+        if (fs.existsSync(binary)) return { command: binary, args: [], shell: false };
+      }
       return { command: path.resolve(candidate), args: [], shell: /\.(cmd|bat)$/i.test(candidate) };
     } catch { /* Try the next location. */ }
   }
@@ -31,7 +35,11 @@ function resolveAgent(name) {
   if (override) {
     return findExecutable(override, [override]);
   }
-  return findExecutable(name, [path.join(os.homedir(), ".local", "bin", name + (process.platform === "win32" ? ".exe" : ""))]);
+  const extra = [path.join(os.homedir(), ".local", "bin", name + (process.platform === "win32" ? ".exe" : ""))];
+  if (name === "cline" && process.platform === "win32" && process.env.APPDATA) {
+    extra.push(path.join(process.env.APPDATA, "npm", "cline.cmd"));
+  }
+  return findExecutable(name, extra);
 }
 
 function runExecutable(executable, args, options = {}) {

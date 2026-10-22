@@ -21,7 +21,9 @@ function sandbox(t) {
   });
   const env = { ...process.env, HOME: root, USERPROFILE: root,
     CLAUDE_CONFIG_DIR: path.join(root, "user-claude"), CODEX_HOME: path.join(root, "user-codex"),
+    CLINE_DIR: path.join(root, "user-cline"),
     PBHANDOVER_MUSE_BIN: path.join(root, "no-muse"), PBHANDOVER_NO_WORKER: "1", PBHANDOVER_WORKER: "",
+    PBHANDOVER_CLINE_BIN: path.join(root, "no-cline"),
     GIT_CONFIG_GLOBAL: path.join(root, "gitconfig"), GIT_CONFIG_NOSYSTEM: "1" };
   return { root, env };
 }
@@ -79,6 +81,37 @@ test("missing agent overrides report unavailable", (t) => {
   const result = cp.spawnSync(process.execPath, ["-e", `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.resolve(__dirname, "../src/executables"))}).resolveAgent('muse')))`], { env: box.env, encoding: "utf8" });
   assert.equal(result.stdout.trim(), "null");
   assert.equal(findExecutable("a-nonexistent-pbhandover-test-command"), null);
+});
+
+test("Muse detects legacy and nested plugin listings, including disabled entries", (t) => {
+  const box = sandbox(t);
+  const script = `
+    const assert = require('node:assert/strict');
+    const wsl = require(${JSON.stringify(path.resolve("src/wsl.js"))});
+    let plugins;
+    wsl.resolveMuse = () => ({command:'mock'});
+    wsl.runMuse = () => ({status:0,stdout:JSON.stringify({plugins})});
+    const adapter = require(${JSON.stringify(path.resolve("src/adapters/muse.js"))});
+    for (const [listing, expected] of [
+      [[{id:'pbhandover',enabled:true}],true],
+      [[{id:'pbhandover',enabled:false}],false],
+      [[{plugin:{id:'pbhandover'},record:{enabled:true},active:true}],true],
+      [[{plugin:{id:'pbhandover'},record:{enabled:false},active:true}],false],
+      [[{plugin:{id:'pbhandover'},record:{enabled:true},active:false}],false],
+      [[{plugin:{id:'unrelated'},active:true}],false]
+    ]) {plugins=listing;assert.equal(adapter.routerInstalled(),expected);}
+  `;
+  const result = cp.spawnSync(process.execPath, ["-e", script], { env: box.env, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("Windows Cline npm shim resolves to its native binary", {skip: process.platform !== "win32"}, (t) => {
+  const box = sandbox(t);
+  const shim = path.join(box.root, "cline.cmd");
+  const binary = path.join(box.root, "node_modules/cline/node_modules/@cline", `cli-windows-${process.arch}/bin/cline.exe`);
+  fs.mkdirSync(path.dirname(binary), {recursive:true});
+  fs.writeFileSync(shim, "@echo off\r\n"); fs.writeFileSync(binary, "placeholder");
+  assert.deepEqual(findExecutable(shim, [shim]), {command:binary,args:[],shell:false});
 });
 
 test("on uses private Git exclusions and leaves public .gitignore intact", (t) => {

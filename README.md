@@ -1,6 +1,6 @@
 # pbhandover
 
-`pbhandover` is a single npm CLI that keeps **one shared `HANDOVER.md`** — a living project handover note — automatically up to date for **Claude Code, Codex CLI, and Muse Code**. It works through each agent's **Stop hook**, and it is **non-blocking**: when a turn ends the hook only enqueues a tiny job and returns immediately. A detached background worker then asks an agent (in headless mode) to summarize the latest turn into `HANDOVER.md`. Your agent never waits on the handover update.
+`pbhandover` is a single npm CLI that keeps **one shared `HANDOVER.md`** — a living project handover note — automatically up to date for **Claude Code, Codex CLI, Muse Code, and Cline CLI**. It uses Stop hooks or Cline's native completion callback. When a turn ends, the integration enqueues a job and returns; a detached background worker asks the same agent to summarize the turn into `HANDOVER.md`.
 
 日本語版は [README.ja.md](README.ja.md) を参照してください。
 
@@ -29,6 +29,8 @@
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
 - [Agent integration details](#agent-integration-details)
+- [Cline CLI](#cline-cli)
+- [Muse Code](#muse-code-native-and-windows--wsl)
 - [Uninstall](#uninstall)
 - [FAQ & troubleshooting](#faq--troubleshooting)
 - [Development](#development)
@@ -67,6 +69,7 @@ The generated handover files are local by default. They can include machine-spec
 - The agent(s) you want to use:
   - **Claude Code** CLI (`claude` on your `PATH`) — for Claude integration
   - **Muse Code** (`muse`, native or WSL) — Muse integration
+  - **Cline CLI** (`cline`, with native plugin support; verified with 3.0.73) — Cline integration
   - **Codex CLI** (`codex` on your `PATH`) — for Codex integration
 - Windows, macOS, or Linux
 
@@ -95,7 +98,7 @@ Global installation does **not** automatically enable handover generation for al
    pbhandover on
    ```
 
-   With no agent flags this **auto-detects** agents: it enables every agent whose project dir (`.claude` / `.codex` / `.muse`) exists, or whose CLI is installed. If none is detected, install an agent or select an adapter explicitly.
+   With no agent flags this **auto-detects** agents: it enables every agent whose project dir (`.claude` / `.codex` / `.muse` / `.cline` / `.clinerules`) exists, or whose CLI is installed. If none is detected, install an agent or select an adapter explicitly.
 
 3. Check the setup:
 
@@ -114,7 +117,7 @@ You can also do all of this from inside an agent session — see below.
 
 ## Daily use: `@handover` inside a session
 
-This is the primary, everyday way to drive the tool. Inside a **Claude Code** or **Codex** session, type:
+Inside a **Claude Code**, **Codex**, **Muse Code**, or **Cline CLI** session, type the same commands:
 
 ```text
 @handover on
@@ -125,10 +128,11 @@ This is the primary, everyday way to drive the tool. Inside a **Claude Code** or
 
 `@handover setup` and `@handover doctor` are also accepted (`doctor` is an alias of `status`).
 
-How it works: a `UserPromptSubmit` router intercepts prompts that start with `@handover` (also `/handover`, `handover`, or `pbhandover`), runs the matching CLI subcommand locally in the project, and returns the result back to the session **without** sending it to the model as a normal prompt.
+The integration recognizes command prompts, runs the matching CLI subcommand locally in the project, and returns its result to the session. Cline uses a native runtime plugin; the other adapters use `UserPromptSubmit` hooks.
 
 - In **Claude Code**, the router responds with a `block` decision, so `@handover ...` never costs model tokens. Claude Code additionally supports the native **`/handover`** slash command (`/handover on`, `/handover status`, etc.), which runs the same CLI through the Bash tool.
 - In **Codex**, the router runs the command locally and injects the result as additional context, asking Codex to report the result instead of treating the prompt as an ordinary request.
+- **Muse Code** and **Cline CLI** also receive the local result as context for a concise model-generated reply. Restart existing sessions after installing or updating integrations.
 
 Only this fixed set of subcommands is routed: `on`, `off`, `status`, `doctor`, `flush`, `setup`. Anything else is passed through to the model normally.
 
@@ -137,12 +141,12 @@ Only this fixed set of subcommands is routed: `on`, `off`, `status`, `doctor`, `
 | Command | What it does |
 | --- | --- |
 | `pbhandover setup [--force] [--no-router]` | Create the shared user `template.md`, `prompt.md`, and `config.json`, and install the `@handover` command router (+ `/handover` slash command) for every available agent. `--force` overwrites the shared template/prompt with package defaults. `--no-router` skips router installation. |
-| `pbhandover on [--claude] [--codex] [--muse] [--track-handover] [--track-hooks] [--force-template]` | Enable the Stop hook in the current project. No agent flag → **auto-detect** (see [Quickstart](#quickstart)). Creates `.pbhandover/`, the project template/prompt/config, `HANDOVER.md`, and each selected agent's Stop hook. Updates private Git exclusions. |
-| `pbhandover off [--claude] [--codex] [--muse]` | Disable this tool's Stop hook in the current project. No flag → all currently configured agents. Leaves `HANDOVER.md` and `.pbhandover/` in place. |
+| `pbhandover on [--claude] [--codex] [--muse] [--cline] [--track-handover] [--track-hooks] [--force-template]` | Enable the Stop hook in the current project. No agent flag → **auto-detect** (see [Quickstart](#quickstart)). Creates `.pbhandover/`, the project template/prompt/config, `HANDOVER.md`, and each selected agent's Stop hook. Updates private Git exclusions. |
+| `pbhandover off [--claude] [--codex] [--muse] [--cline]` | Disable this tool's Stop hook in the current project. No flag → all currently configured agents. Leaves `HANDOVER.md` and `.pbhandover/` in place. |
 | `pbhandover status` (alias `doctor`) | Show global ON/OFF, the handover/template paths, queue counts (pending/done/failed), and per-agent `enabled` / `model` / `available` / hook-file status. |
-| `pbhandover router install\|uninstall\|status [--claude] [--codex] [--muse]` | Manage the `@handover` `UserPromptSubmit` router and the `/handover` slash command. No flag → available agents for install/uninstall; `status` always reports all agents. |
+| `pbhandover router install\|uninstall\|status [--claude] [--codex] [--muse] [--cline]` | Manage the `@handover` `UserPromptSubmit` router and the `/handover` slash command. No flag → available agents for install/uninstall; `status` always reports all agents. |
 | `pbhandover trust` | Trust this tool's installed Codex hooks (writes `[hooks.state.*]` entries into `~/.codex/config.toml`). |
-| `pbhandover enqueue --agent claude\|codex` | **Internal** Stop hook entrypoint. Writes one queued job and spawns the worker, then returns. You normally do not run this manually. |
+| `pbhandover enqueue --agent claude\|codex\|muse\|cline` | **Internal** Stop hook entrypoint. Writes one queued job and spawns the worker, then returns. You normally do not run this manually. |
 | `pbhandover worker` | **Internal.** Process queued jobs sequentially in the background. |
 | `pbhandover flush` | Process queued jobs in the foreground and wait until the queue drains. |
 | `pbhandover template path\|sync [--force]` | `path` prints the shared and project template paths. `sync` creates the project template from the shared one (`--force` overwrites). |
@@ -151,7 +155,7 @@ Only this fixed set of subcommands is routed: `on`, `off`, `status`, `doctor`, `
 
 ### `on` options
 
-- `--claude` / `--codex` / `--muse` — enable only the named agent(s). With no agent flags, agents are auto-detected.
+- `--claude` / `--codex` / `--muse` / `--cline` — enable only the named agent(s). With no agent flags, agents are auto-detected.
 - `--track-handover` — create a repository-local tracking exception for `HANDOVER.md`.
 - `--track-hooks` — create repository-local tracking exceptions for agent hook files.
 - `--force-template` — overwrite the project-local template and prompt from the shared user copies.
@@ -211,7 +215,7 @@ your-project/
   Agent finishes a turn (Claude Code or Codex)
             │
             ▼
-  Stop hook fires ──► pbhandover enqueue --agent <claude|codex|muse>
+  Stop hook fires ──► pbhandover enqueue --agent <claude|codex|muse|cline>
             │            • recursion guards check (see below)
             │            • writes ONE job into .pbhandover/queue/
             │            • spawns a detached background worker
@@ -283,7 +287,7 @@ Redaction covers queued payloads, the transcript tail, the existing `HANDOVER.md
 
 When the worker builds a prompt it reads, in priority order: the project-local template → falling back to the bundled default. Because the template is read per job, editing `.pbhandover/template.md` changes the next handover update. Edit the project-local template when one project needs a different format; edit the user-level shared template to change the default for future projects.
 
-The default template is in Japanese and has ten sections (project purpose; current work/tasks; commands run; successes/completed tasks; failures/errors; suspected causes; attempted fixes; next actions/backlog; cautions; other notable items), plus a "last updated" line and an "agent" field that records which agent (claude, codex, or muse) produced the update.
+The default template is in Japanese and has ten sections (project purpose; current work/tasks; commands run; successes/completed tasks; failures/errors; suspected causes; attempted fixes; next actions/backlog; cautions; other notable items), plus a "last updated" line and an "agent" field that records which agent (claude, codex, muse, or cline) produced the update.
 
 ## Configuration
 
@@ -299,7 +303,8 @@ Created by `setup`:
   "agents": {
     "claude": { "enabled": false, "model": "claude-haiku-4-5-20251001" },
     "codex":  { "enabled": false, "model": null },
-    "muse":   { "enabled": false, "model": null }
+    "muse":   { "enabled": false, "model": null },
+    "cline":  { "enabled": false, "model": null }
   }
 }
 ```
@@ -320,7 +325,8 @@ Created/updated by `on`:
   "agents": {
     "claude": { "enabled": true, "model": "claude-haiku-4-5-20251001" },
     "codex":  { "enabled": true, "model": null },
-    "muse":   { "enabled": true, "model": null }
+    "muse":   { "enabled": true, "model": null },
+    "cline":  { "enabled": true, "model": null }
   }
 }
 ```
@@ -434,6 +440,53 @@ with `git check-ignore -v`.
 Redaction is best effort. Review output before sharing it. Never commit private
 transcripts, credentials, or machine-specific bridge configuration. Use `local/`
 for non-distributed local work.
+
+## Cline CLI
+
+Version 0.3 adds Cline's native runtime plugin. Install a plugin-capable Cline CLI
+(tested with 3.0.73) and configure its provider/model in Cline, then run:
+
+```sh
+pbhandover router install --cline
+pbhandover on --cline
+```
+
+Restart Cline, then use the same `@handover on`, `@handover off`, `@handover status`,
+and `@handover flush` commands. `setup` and `doctor` are also supported. A plain
+`pbhandover on` auto-detects installed agents; explicit flags select only those
+agents. Muse Code uses exactly the same session commands.
+
+The generated plugin is `~/.cline/plugins/pbhandover.js`, or
+`$CLINE_DIR/plugins/pbhandover.js` when configured. Use the same `CLINE_DIR` when
+installing the router and launching Cline with a custom configuration directory.
+The plugin uses the host session's working directory, runs commands locally,
+and injects results before the model request. Command replies can use Cline's
+completion tool, but cannot run other tools. Cline's wrapped CLI input is supported.
+This integration targets Cline CLI's native plugin API; it does not depend on
+the extension's legacy file hooks.
+
+After a successful ordinary turn, the plugin queues the turn and its redacted
+conversation tail. The shared worker invokes `cline --yolo --json --cwd <project>`
+with a short prompt directing it to `.pbhandover/cline-prompt.md`. The complete
+task stays in that file, avoiding Windows stdin detection and argument length
+limits. The configured CLI model is used unless
+`agents.cline.model` overrides it. `PBHANDOVER_CLINE_BIN` overrides executable
+discovery. On Windows, standard npm installations use the native bundled binary
+when available, avoiding command-shim quoting problems.
+
+`off --cline` disables updates for the current project and keeps the command
+router available. `router uninstall --cline` removes the shared plugin for every
+project, while preserving unrelated plugins. The worker environment and a worker
+prompt marker prevent recursive updates; subagent and unsuccessful turns are
+ignored. As with other adapters, a successful CLI exit without a changed
+`HANDOVER.md` is recorded as a failed job.
+
+Cline CLI 3.0.73 was exercised with a local mock provider: the actual CLI loaded
+the plugin, received the command result, completed its turn, queued a job, and
+updated `HANDOVER.md` through the shared worker without recursive enqueueing.
+These checks do not establish authentication or real-model availability.
+See [Cline CLI documentation](https://github.com/cline/cline/blob/main/apps/cli/README.md)
+and [native plugin examples](https://github.com/cline/cline/blob/main/sdk/examples/plugins/README.md).
 
 ## Muse Code (native and Windows + WSL)
 

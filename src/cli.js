@@ -75,23 +75,23 @@ async function main(argv) {
 }
 
 function help() {
-  console.log(`${CLI_NAME} — shared HANDOVER.md for Claude Code, Codex CLI and Muse Code
+  console.log(`${CLI_NAME} — shared HANDOVER.md for Claude Code, Codex CLI, Muse Code and Cline CLI
 
 Usage:
   ${CLI_NAME} setup [--force] [--no-router]
-  ${CLI_NAME} on [--claude] [--codex] [--muse] [--track-handover] [--track-hooks] [--force-template]
-  ${CLI_NAME} off [--claude] [--codex] [--muse]
+  ${CLI_NAME} on [--claude] [--codex] [--muse] [--cline] [--track-handover] [--track-hooks] [--force-template]
+  ${CLI_NAME} off [--claude] [--codex] [--muse] [--cline]
   ${CLI_NAME} status
-  ${CLI_NAME} router install|uninstall|status [--claude] [--codex] [--muse]
+  ${CLI_NAME} router install|uninstall|status [--claude] [--codex] [--muse] [--cline]
   ${CLI_NAME} trust
-  ${CLI_NAME} enqueue --agent claude|codex|muse
+  ${CLI_NAME} enqueue --agent claude|codex|muse|cline
   ${CLI_NAME} worker
   ${CLI_NAME} flush
   ${CLI_NAME} template path|sync [--force]
 
 Commands:
   setup      Create the shared user template, prompt, config and command router.
-  on         Enable the Stop hook in the current project (auto-detects claude/codex/muse).
+  on         Enable completion hooks in the current project (auto-detects claude/codex/muse/cline).
   off        Disable this tool's Stop hook in the current project.
   status     Show project, per-agent and queue status.
   router     Install or remove the @handover command router (and /handover slash).
@@ -278,7 +278,7 @@ async function enqueue(args) {
   if (process.env[WORKER_ENV] === "1") return;
 
   const agent = parseAgentValue(args) || "claude";
-  getAdapter(agent);
+  const adapter = getAdapter(agent);
   const stdin = await readStdin();
   let payload = {};
   if (stdin.trim()) {
@@ -288,6 +288,8 @@ async function enqueue(args) {
       payload = { raw_stdin: stdin };
     }
   }
+
+  if (adapter.normalizePayload) payload = adapter.normalizePayload(payload);
 
   // Secondary guard: agents mark re-entrant Stop events.
   if (payload.stop_hook_active === true) return;
@@ -341,6 +343,7 @@ async function promptRouter(args) {
     }
   }
 
+  if (adapter.normalizePayload) payload = adapter.normalizePayload(payload);
   const prompt = String(payload.prompt || "").trim();
   const parsed = parseInternalCommand(prompt);
   if (!parsed) return;
@@ -601,7 +604,7 @@ function resolveAgentsForOn(args, root) {
     const adapter = getAdapter(name);
     return adapter.isConfigured(root) || adapter.isAvailable();
   });
-  if (!detected.length) throw new Error("No coding agent detected. Install an agent or select --claude, --codex, or --muse explicitly.");
+  if (!detected.length) throw new Error("No coding agent detected. Install an agent or select --claude, --codex, --muse, or --cline explicitly.");
   return detected;
 }
 
@@ -653,10 +656,13 @@ function updateGitignore(root, options) {
   if (info.status === 0) {
     const target = path.resolve(root, info.stdout.trim());
     const previous = readText(target, "");
-    const overrides = [`!/${HANDOVER_FILE}`, ...AGENTS.filter((name) => name !== "muse").map((name) => `!/${getAdapter(name).hookIgnoreEntry()}`)];
+    const overrides = [`!/${HANDOVER_FILE}`, ...AGENTS.filter((name) => name !== "muse").map((name) => getAdapter(name).hookIgnoreEntry()).filter(Boolean).map((entry) => `!/${entry}`)];
     const lines = previous.split(/\r?\n/).filter((line) => !overrides.includes(line));
     if (options.trackHandover) lines.push(`!/${HANDOVER_FILE}`);
-    if (options.trackHooks) for (const name of options.agents.filter((name) => name !== "muse")) lines.push(`!/${getAdapter(name).hookIgnoreEntry()}`);
+    if (options.trackHooks) for (const name of options.agents) {
+      const entry = getAdapter(name).hookIgnoreEntry();
+      if (entry && name !== "muse") lines.push(`!/${entry}`);
+    }
     writeText(target, lines.join("\n").trimEnd() + "\n");
   }
 }

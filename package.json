@@ -1,7 +1,7 @@
 {
   "name": "pbhandover",
-  "version": "0.2.0",
-  "description": "Non-blocking shared handover automation for Claude Code, Codex CLI, and Muse Code, including Windows/WSL integration.",
+  "version": "0.3.0",
+  "description": "Non-blocking shared handover automation for Claude Code, Codex CLI, Muse Code, and Cline CLI, including Windows/WSL integration.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -42,6 +42,8 @@
     "handover",
     "automation",
     "muse-code",
+    "cline",
+    "cline-cli",
     "wsl"
   ]
 }

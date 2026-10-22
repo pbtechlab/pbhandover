@@ -1,6 +1,6 @@
 # pbhandover
 
-`pbhandover` は、**1 つの共有 `HANDOVER.md`**（プロジェクトの引き継ぎメモ）を **Claude Code・Codex CLI・Muse Code** に対して自動で最新に保つ、単一の npm CLI です。各エージェントの **Stop フック** を利用して動作し、**ノンブロッキング** です。ターンが終わると、フックはごく小さなジョブをキューに入れてすぐに戻ります。その後、デタッチされたバックグラウンドワーカーが（ヘッドレスモードの）エージェントに直近ターンの要約を依頼し、`HANDOVER.md` を更新します。エージェントは引き継ぎ更新を待ちません。
+`pbhandover` は、**1 つの共有 `HANDOVER.md`**（プロジェクトの引き継ぎメモ）を **Claude Code・Codex CLI・Muse Code・Cline CLI** に対して自動で最新に保つ、単一の npm CLI です。Stop フック、または Cline のネイティブ完了コールバックを利用します。ターン終了時にジョブをキューへ登録し、バックグラウンドワーカーが同じエージェントに要約を依頼して `HANDOVER.md` を更新します。
 
 English version: [README.md](README.md)
 
@@ -29,6 +29,8 @@ English version: [README.md](README.md)
 - [設定](#設定)
 - [環境変数](#環境変数)
 - [エージェント連携の詳細](#エージェント連携の詳細)
+- [Cline CLI 対応](#cline-cli-対応)
+- [Muse Code 対応](#muse-code-対応ネイティブwindowswsl)
 - [アンインストール](#アンインストール)
 - [FAQ・トラブルシューティング](#faqトラブルシューティング)
 - [開発](#開発)
@@ -55,7 +57,7 @@ English version: [README.md](README.md)
 - **プロジェクトごとに 1 つの共有状態ディレクトリ** — `.pbhandover/` に設定・テンプレート・プロンプト・キュー・ログ・ワーカーロックをまとめます。
 - **1 つの共有 `HANDOVER.md`** — プロジェクトルートに置かれ、有効なエージェントが読み書きします。
 - **発火エージェント別の要約** — 各 Stop フックは、どのエージェントが発火したかをジョブにタグ付けします（`--agent claude` / `--agent codex`）。ワーカーは **同じ** エージェントで要約します（Claude のターンは Claude、Codex のターンは Codex）。モデルはエージェントごとに設定可能です。
-- **セッション内での操作** — Claude Code / Codex / Muse Code のセッション内で `@handover on|off|status|flush`（および `setup`/`doctor`）を直接入力できます。Claude Code はネイティブの `/handover` スラッシュコマンドにも対応します。
+- **セッション内での操作** — Claude Code / Codex / Muse Code / Cline CLI のセッション内で `@handover on|off|status|flush`（および `setup`/`doctor`）を直接入力できます。Claude Code はネイティブの `/handover` スラッシュコマンドにも対応します。
 - **ノンブロッキング** — Stop フックはキューに入れるだけ。ワーカーはバックグラウンドでデタッチ実行されます。
 - **再帰安全** — ワーカー自身のエージェント実行が、引き継ぎの無限ループを引き起こさないようガードします。
 - **シークレットの墨消し** — API キー、トークン、シークレット、パスワード、`Bearer` トークン、`sk-...` キーを、キューのペイロード・トランスクリプト・取得した出力から除去します。
@@ -67,6 +69,7 @@ English version: [README.md](README.md)
 - 使いたいエージェント:
   - **Claude Code** CLI（`PATH` 上に `claude`）— Claude 連携用
   - **Muse Code**（`muse`、ネイティブまたはWSL）— Muse 連携用
+  - **Cline CLI**（`cline`、ネイティブプラグイン対応版。3.0.73 で確認）— Cline 連携用
   - **Codex CLI**（`PATH` 上に `codex`）— Codex 連携用
 - Windows / macOS / Linux
 
@@ -95,7 +98,7 @@ npm install -g pbhandover
    pbhandover on
    ```
 
-   エージェントフラグなしの場合は **自動検出** されます。プロジェクトディレクトリ（`.claude` / `.codex` / `.muse`）が存在するか、CLI がインストールされているエージェントをすべて有効化します。いずれも検出されない場合は、エージェントを導入するか対象を明示してください。
+   エージェントフラグなしの場合は **自動検出** されます。プロジェクトディレクトリ（`.claude` / `.codex` / `.muse` / `.cline` / `.clinerules`）が存在するか、CLI がインストールされているエージェントをすべて有効化します。いずれも検出されない場合は、エージェントを導入するか対象を明示してください。
 
 3. 設定を確認します。
 
@@ -114,7 +117,7 @@ npm install -g pbhandover
 
 ## 日常利用: セッション内での `@handover`
 
-これが最も主要な日常の操作方法です。**Claude Code** または **Codex** のセッション内で次を入力します。
+**Claude Code・Codex・Muse Code・Cline CLI** のセッション内で、同じコマンドを入力します。
 
 ```text
 @handover on
@@ -125,10 +128,11 @@ npm install -g pbhandover
 
 `@handover setup` と `@handover doctor` も使えます（`doctor` は `status` の別名）。
 
-仕組み: `UserPromptSubmit` ルーターが `@handover` で始まるプロンプト（`/handover`、`handover`、`pbhandover` も対象）を横取りし、対応する CLI サブコマンドをプロジェクト内でローカル実行して、その結果をセッションに返します。**通常のプロンプトとしてモデルには送られません。**
+コマンドを認識すると、対応する CLI サブコマンドをプロジェクト内でローカル実行し、その結果をセッションへ返します。Cline はネイティブのランタイムプラグイン、それ以外のアダプタは `UserPromptSubmit` フックを使います。
 
 - **Claude Code** では、ルーターは `block` 判定で応答するため、`@handover ...` はモデルのトークンを消費しません。さらに Claude Code はネイティブの **`/handover`** スラッシュコマンド（`/handover on`、`/handover status` など）にも対応し、これは同じ CLI を Bash ツール経由で実行します。
 - **Codex** では、ルーターがコマンドをローカル実行し、その結果を追加コンテキストとして注入して、通常のリクエストとして扱わず結果を報告するよう Codex に促します。
+- **Muse Code・Cline CLI** も実行結果を追加コンテキストで受け取り、モデルが短く表示します。導入・更新後は起動済みセッションを再起動してください。
 
 ルーティングされるのは次の固定セットのみです: `on`、`off`、`status`、`doctor`、`flush`、`setup`。それ以外は通常どおりモデルに渡されます。
 
@@ -137,12 +141,12 @@ npm install -g pbhandover
 | コマンド | 説明 |
 | --- | --- |
 | `pbhandover setup [--force] [--no-router]` | 共有ユーザーの `template.md` / `prompt.md` / `config.json` を作成し、利用可能な全エージェントに `@handover` コマンドルーター（+ `/handover` スラッシュコマンド）をインストールします。`--force` は共有テンプレート/プロンプトをパッケージ既定で上書き。`--no-router` はルーター導入をスキップ。 |
-| `pbhandover on [--claude] [--codex] [--muse] [--track-handover] [--track-hooks] [--force-template]` | 現在のプロジェクトで Stop フックを有効化します。エージェントフラグなし → **自動検出**（[クイックスタート](#クイックスタート)参照）。`.pbhandover/`、プロジェクトのテンプレート/プロンプト/設定、`HANDOVER.md`、選択した各エージェントの Stop フックを作成し、非公開の Git 除外設定を更新します。 |
-| `pbhandover off [--claude] [--codex] [--muse]` | 現在のプロジェクトで本ツールの Stop フックを無効化します。フラグなし → 現在構成済みの全エージェント。`HANDOVER.md` と `.pbhandover/` はそのまま残します。 |
+| `pbhandover on [--claude] [--codex] [--muse] [--cline] [--track-handover] [--track-hooks] [--force-template]` | 現在のプロジェクトで Stop フックを有効化します。エージェントフラグなし → **自動検出**（[クイックスタート](#クイックスタート)参照）。`.pbhandover/`、プロジェクトのテンプレート/プロンプト/設定、`HANDOVER.md`、選択した各エージェントの Stop フックを作成し、非公開の Git 除外設定を更新します。 |
+| `pbhandover off [--claude] [--codex] [--muse] [--cline]` | 現在のプロジェクトで本ツールの Stop フックを無効化します。フラグなし → 現在構成済みの全エージェント。`HANDOVER.md` と `.pbhandover/` はそのまま残します。 |
 | `pbhandover status`（別名 `doctor`） | 全体の ON/OFF、引き継ぎ/テンプレートのパス、キュー件数（pending/done/failed）、各エージェントの `enabled` / `model` / `available` / フックファイル状況を表示します。 |
-| `pbhandover router install\|uninstall\|status [--claude] [--codex] [--muse]` | `@handover` の `UserPromptSubmit` ルーターと `/handover` スラッシュコマンドを管理します。install/uninstall はフラグなしで利用可能エージェント対象。`status` は常に全エージェントを報告。 |
+| `pbhandover router install\|uninstall\|status [--claude] [--codex] [--muse] [--cline]` | `@handover` の `UserPromptSubmit` ルーターと `/handover` スラッシュコマンドを管理します。install/uninstall はフラグなしで利用可能エージェント対象。`status` は常に全エージェントを報告。 |
 | `pbhandover trust` | インストール済みの Codex フックを信頼します（`~/.codex/config.toml` に `[hooks.state.*]` を書き込み）。 |
-| `pbhandover enqueue --agent claude\|codex` | **内部用** の Stop フックエントリポイント。1 件のジョブを書き込みワーカーを起動して戻ります。通常は手動実行しません。 |
+| `pbhandover enqueue --agent claude\|codex\|muse\|cline` | **内部用** の Stop フックエントリポイント。1 件のジョブを書き込みワーカーを起動して戻ります。通常は手動実行しません。 |
 | `pbhandover worker` | **内部用。** キュー内のジョブをバックグラウンドで順次処理します。 |
 | `pbhandover flush` | キュー内のジョブをフォアグラウンドで処理し、空になるまで待機します。 |
 | `pbhandover template path\|sync [--force]` | `path` は共有/プロジェクトのテンプレートパスを表示。`sync` は共有テンプレートからプロジェクトテンプレートを作成（`--force` で上書き）。 |
@@ -151,7 +155,7 @@ npm install -g pbhandover
 
 ### `on` のオプション
 
-- `--claude` / `--codex` / `--muse` — 指定したエージェントのみ有効化。どちらも指定しない場合は自動検出。
+- `--claude` / `--codex` / `--muse` / `--cline` — 指定したエージェントのみ有効化。いずれも指定しない場合は自動検出。
 - `--track-handover` — `HANDOVER.md` にリポジトリ単位のローカルな追跡例外を設定します。
 - `--track-hooks` — フックファイルにリポジトリ単位のローカルな追跡例外を設定します。
 - `--force-template` — 共有ユーザーのコピーから、プロジェクトのテンプレートとプロンプトを上書きします。
@@ -211,7 +215,7 @@ your-project/
   エージェントがターンを終える（Claude Code または Codex）
             │
             ▼
-  Stop フック発火 ──► pbhandover enqueue --agent <claude|codex|muse>
+  Stop フック発火 ──► pbhandover enqueue --agent <claude|codex|muse|cline>
             │            ・再帰ガードを確認（下記）
             │            ・.pbhandover/queue/ にジョブを 1 件書き込む
             │            ・デタッチされたバックグラウンドワーカーを起動
@@ -283,7 +287,7 @@ your-project/
 
 ワーカーはプロンプト構築時に、優先順に「プロジェクトのテンプレート → バンドルされた既定」を読み込みます。テンプレートはジョブごとに読まれるため、`.pbhandover/template.md` を編集すると次回の引き継ぎ更新に反映されます。特定プロジェクトで別形式が必要ならプロジェクトのテンプレートを、今後のプロジェクトの既定を変えたいならユーザー共有テンプレートを編集してください。
 
-既定のテンプレートは日本語で、10 セクション（プロジェクトの目的／現在の作業・タスク／実行したコマンド／成功・完了タスク／失敗・エラー／疑っている原因／試した対処／次にやること・積まれているタスク／注意点／その他重要な特記事項）に加え、「最終更新」行と、どのエージェント（claude / codex / muse）が更新したかを記録する「エージェント」欄を持ちます。
+既定のテンプレートは日本語で、10 セクション（プロジェクトの目的／現在の作業・タスク／実行したコマンド／成功・完了タスク／失敗・エラー／疑っている原因／試した対処／次にやること・積まれているタスク／注意点／その他重要な特記事項）に加え、「最終更新」行と、どのエージェント（claude / codex / muse / cline）が更新したかを記録する「エージェント」欄を持ちます。
 
 ## 設定
 
@@ -299,7 +303,8 @@ your-project/
   "agents": {
     "claude": { "enabled": false, "model": "claude-haiku-4-5-20251001" },
     "codex":  { "enabled": false, "model": null },
-    "muse":   { "enabled": false, "model": null }
+    "muse":   { "enabled": false, "model": null },
+    "cline":  { "enabled": false, "model": null }
   }
 }
 ```
@@ -320,7 +325,8 @@ your-project/
   "agents": {
     "claude": { "enabled": true, "model": "claude-haiku-4-5-20251001" },
     "codex":  { "enabled": true, "model": null },
-    "muse":   { "enabled": true, "model": null }
+    "muse":   { "enabled": true, "model": null },
+    "cline":  { "enabled": true, "model": null }
   }
 }
 ```
@@ -424,6 +430,49 @@ node bin/pbhandover.js --help
 除外対象は引き継ぎ・バックアップ・一時ファイル・実行状態・個人用フック設定・一般的な秘密ファイルです。`--track-handover` / `--track-hooks` は、Git リポジトリが存在する場合に `.git/info/exclude` にローカルな追跡例外を設定します。上位の除外規則がある場合は `git check-ignore -v` で確認してください。
 
 墨消しは完全な保証ではありません。共有前に生成文書とログを確認してください。認証情報・私的な会話ログ・マシン固有のブリッジ設定を公開しないでください。配布しない作業物は `local/` に置きます。
+
+## Cline CLI 対応
+
+0.3 で Cline のネイティブランタイムプラグインに対応しました。対応版の Cline CLI
+（3.0.73 で確認）を導入し、Cline 側でプロバイダー・モデルを設定してから実行します。
+
+```sh
+pbhandover router install --cline
+pbhandover on --cline
+```
+
+Cline を再起動すると、同じ `@handover on`・`@handover off`・`@handover status`・
+`@handover flush` を使えます。`setup`・`doctor` にも対応しています。
+通常の `pbhandover on` は導入済みエージェントを自動検出し、明示フラグがある場合は
+指定されたものだけを選びます。Muse Code のセッションでも同じコマンドを使います。
+
+生成プラグインは `~/.cline/plugins/pbhandover.js`、`CLINE_DIR` 指定時は
+`$CLINE_DIR/plugins/pbhandover.js` です。Cline の設定ディレクトリを変更する場合は、
+ルーター導入時と Cline 起動時に同じ `CLINE_DIR` を指定してください。
+プラグインはホストセッションの作業ディレクトリでコマンドをローカル実行し、
+モデル呼び出し前に結果を追加します。コマンドへの応答時は Cline の完了ツールを
+維持し、それ以外のツールによる再実行を防ぎます。CLI 内部タグで包まれた入力にも
+対応します。対象は Cline CLI のネイティブプラグイン API です。
+
+通常ターンの成功後に、ターン情報と秘密情報を墨消しした会話末尾を共有キューへ登録します。
+ワーカーは `cline --yolo --json --cwd <project>` を使い、短い起動プロンプトで
+`.pbhandover/cline-prompt.md` の指示を読ませます。長い指示はこのファイルに保持し、
+Windows の標準入力検出と引数長の制限を回避します。
+モデルは Cline の設定を使い、`agents.cline.model` で変更できます。
+`PBHANDOVER_CLINE_BIN` で実行ファイルを指定できます。Windows の標準 npm 導入では、
+同梱されたネイティブ実行ファイルを優先し、コマンドシムの引用符問題を回避します。
+
+`off --cline` は現在のプロジェクトの更新だけを停止し、コマンドルーターを残します。
+`router uninstall --cline` は全プロジェクトで共通のプラグインを削除します。
+他のプラグインは保持します。ワーカー環境変数と要約プロンプトの識別子で再帰を防ぎ、
+サブエージェント・失敗ターンは登録しません。終了コード0でも `HANDOVER.md` が
+変わっていなければ失敗として記録します。
+
+Cline CLI 3.0.73 本体とローカルの模擬プロバイダーを使い、プラグイン読み込み・
+コマンド結果の注入・ターン完了・キュー登録・共有ワーカーによる `HANDOVER.md` 更新・
+再帰登録が起きないことを確認しました。認証と実モデルの利用可否は
+この検証には含みません。参照：[Cline CLI](https://github.com/cline/cline/blob/main/apps/cli/README.md)、
+[ネイティブプラグイン例](https://github.com/cline/cline/blob/main/sdk/examples/plugins/README.md)。
 
 ## Muse Code 対応（ネイティブ／Windows＋WSL）
 
